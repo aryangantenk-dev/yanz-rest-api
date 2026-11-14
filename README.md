@@ -26,7 +26,7 @@ Kode berada langsung di root repository, jadi Vercel maupun Netlify mendeteksiny
 | `BAN_AFTER_STRIKES` | Jumlah pelanggaran dalam 10 menit sebelum IP diblokir permanen. Default `3`. |
 | `OWNER_WHATSAPP` | Nomor WhatsApp owner untuk banding blokir. Default `62895403334081`. |
 | `WEB2APK_API_KEY` | Kunci API dari akunmu sendiri di layanan pembuat APK, untuk `/api/tools/web2apk`. Akun gratis mendapat 3 build per hari. Tanpa ini endpoint berjalan sebagai tamu (1 build per hari per alamat IP server), lalu menjawab 429. |
-| `IZZXD_APIKEY` | API key layanan pemecah Turnstile `api.izzxd.my.id`, untuk `/api/tools/zefame-order`. Tanpa ini order hanya berjalan bila pemanggil mengirim token Turnstile sendiri lewat parameter `token`; selain itu endpoint menjawab 503. |
+| `IZZXD_APIKEY` | API key layanan pemecah Turnstile `api.izzxd.my.id`, untuk `/api/tools/zefame-order`. Akun izzxd-nya harus paket Pro; kunci paket gratis ditolak layanan itu. Tanpa ini order hanya berjalan bila pemanggil mengirim token Turnstile sendiri lewat parameter `token`; selain itu endpoint menjawab 503. |
 | `IMAGE_TTL_DAYS` | Berapa hari gambar unggahan (`/api/tools/tourl`) disimpan sebelum dihapus otomatis. Default `30`; `0` berarti selamanya. Fitur ini butuh `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`. |
 | `IMAGE_BUCKET` | Nama bucket Supabase Storage untuk gambar unggahan. Default `yanz-images`; dibuat otomatis. |
 | `AUTH_SECRET` | Kunci acak minimal 32 karakter untuk menandatangani sesi login dan kode verifikasi. Wajib agar login aktif. |

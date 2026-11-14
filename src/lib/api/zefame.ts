@@ -259,6 +259,9 @@ async function solveTurnstile(key: string): Promise<string> {
   const token = data.status ? (str(obj(data.result).token) ?? str(data.token)) : null;
   if (token) return token;
   const msg = str(data.error) ?? str(data.message) ?? "";
+  if (/paket|upgrade|premium|\bpro\b/i.test(msg)) {
+    throw new HttpError(503, "Order otomatis belum aktif: layanan pemecah Turnstile (api.izzxd.my.id) hanya untuk paket Pro, sedangkan kunci di server ini belum Pro. Sementara itu, kirim parameter 'token' berisi token Turnstile dari halaman zefame.com/free-services.");
+  }
   if (res.status === 401 || res.status === 403 || /api\s*-?key/i.test(msg)) {
     throw new HttpError(502, "Kunci layanan pemecah Turnstile (IZZXD_APIKEY) ditolak. Pemilik API perlu memeriksa konfigurasinya.");
   }

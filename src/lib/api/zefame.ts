@@ -10,10 +10,13 @@
  * Adaptasi skrip di atas menjadi endpoint yanz.api (TypeScript, tanpa berkas dan tanpa CLI).
  * Alur, alamat API, dan cara mengenali id video/post/username mengikuti skrip aslinya.
  *
- * Order di Zefame dijaga Cloudflare Turnstile. Tokennya didapat dari salah satu:
- *  - parameter `token` yang dikirim pemanggil, atau
- *  - layanan pemecah Turnstile milik IzzXd, bila env IZZXD_APIKEY diisi di server.
- * Tanpa keduanya, endpoint order menjawab 503. Daftar layanan dan cek status tidak butuh token.
+ * Order di Zefame dijaga Cloudflare Turnstile. Tokennya didapat dari salah satu, berurutan:
+ *  - parameter `token` yang dikirim pemanggil;
+ *  - pemecah di VPS sendiri: EzSolver (https://github.com/ismoiloffS/EzSolver, MIT, buatan Ismoiloff)
+ *    yang dipasang scripts/film-proxy/install.sh dengan SOLVER=1 dan dipanggil lewat film-proxy
+ *    (POST /solve, env FILM_PROXY_URL + FILM_PROXY_KEY);
+ *  - layanan pemecah Turnstile milik IzzXd, bila env IZZXD_APIKEY diisi (akunnya harus paket Pro).
+ * Tanpa satu pun, endpoint order menjawab 503. Daftar layanan dan cek status tidak butuh token.
  */
 
 import type { Endpoint } from "./types";
@@ -238,18 +241,85 @@ function refused(r: Reply, lead: string): HttpError {
 const SOLVES_PER_MINUTE = 10;
 const solves: number[] = [];
 
-/** Minta token Turnstile untuk halaman Zefame ke layanan pemecah. Kuncinya tidak pernah ikut ke pesan galat. */
-async function solveTurnstile(key: string): Promise<string> {
+/** Batas pemakaian pemecah per menit, berlaku untuk pemecah mana pun. */
+function takeSolveSlot(): void {
   const now = Date.now();
   while (solves.length && now - solves[0] > MIN) solves.shift();
   if (solves.length >= SOLVES_PER_MINUTE) throw new HttpError(429, "Order Zefame sedang padat. Coba lagi sekitar satu menit lagi.");
   solves.push(now);
+}
+
+const NO_TOKEN_HINT = "Sementara itu, kirim parameter 'token' berisi token Turnstile dari halaman zefame.com/free-services.";
+
+/**
+ * Minta token ke pemecah di VPS (EzSolver di belakang film-proxy).
+ * "absent": VPS belum diatur atau pemecahnya belum dipasang; "unreachable": VPS tidak bisa dihubungi.
+ */
+async function solveOnVps(): Promise<{ token: string } | "absent" | "unreachable"> {
+  const base = (process.env.FILM_PROXY_URL || "").trim().replace(/\/+$/, "");
+  const key = (process.env.FILM_PROXY_KEY || "").trim();
+  if (!base || !key) return "absent";
+
+  let res: Response;
+  let data: J;
+  try {
+    res = await fetch(`${base}/solve`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-proxy-key": key },
+      body: JSON.stringify({ sitekey: TURNSTILE_SITEKEY, siteurl: PAGE, timeout: 40 }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(60_000),
+    });
+    data = obj(await res.json().catch(() => null));
+  } catch (e) {
+    const name = e instanceof Error ? e.name : "";
+    if (name === "TimeoutError" || name === "AbortError") throw new HttpError(504, "Pemecah Turnstile di VPS terlalu lama merespons. Coba lagi.");
+    return "unreachable";
+  }
+  const token = res.ok ? str(data.token) : null;
+  if (token) return { token };
+
+  const code = str(data.error) ?? "";
+  // film-proxy versi lama tidak mengenal POST (501); versi baru tanpa pemecah menjawab solver_not_installed.
+  if (code === "solver_not_installed" || (!code && [404, 405, 501].includes(res.status))) return "absent";
+  // 502/530 tanpa isi JSON dari film-proxy berarti terowongannya yang putus, bukan pemecahnya yang gagal.
+  if (!code) return "unreachable";
+  if (code === "unauthorized") throw new HttpError(502, "Kunci server perantara tidak cocok (FILM_PROXY_KEY). Pemilik API perlu memeriksa konfigurasinya.");
+  if (code === "busy") throw new HttpError(429, "Pemecah Turnstile sedang sibuk. Coba lagi beberapa detik lagi.");
+  if (code === "timeout") throw new HttpError(504, "Pemecah Turnstile di VPS terlalu lama merespons. Coba lagi.");
+  if (code === "solver_down") throw new HttpError(502, "Pemecah Turnstile di VPS sedang tidak berjalan. Pemilik API perlu menyalakannya lagi (sudo SOLVER=1 bash install.sh).");
+  const detail = str(data.detail);
+  throw new HttpError(502, `Pemecah Turnstile di VPS tidak mendapat token${detail ? `: ${detail.slice(0, 200)}.` : "."} Coba lagi.`);
+}
+
+/** Token otomatis: pemecah di VPS bila terpasang, selain itu layanan IzzXd bila kuncinya diisi. */
+async function autoToken(): Promise<string> {
+  takeSolveSlot();
+  const vps = await solveOnVps();
+  if (typeof vps === "object") return vps.token;
+
+  const key = process.env.IZZXD_APIKEY?.trim();
+  const unreachable = new HttpError(502, "Server perantara (VPS) tempat pemecah Turnstile berjalan tidak bisa dihubungi. Pastikan VPS dan layanan film-proxy masih hidup.");
+  if (key) {
+    try {
+      return await solveTurnstile(key);
+    } catch (e) {
+      if (vps === "unreachable") throw unreachable;
+      throw e;
+    }
+  }
+  if (vps === "unreachable") throw unreachable;
+  throw new HttpError(503, `Order otomatis belum aktif: pemecah Turnstile belum dipasang di server. ${NO_TOKEN_HINT}`);
+}
+
+/** Minta token Turnstile untuk halaman Zefame ke layanan pemecah IzzXd. Kuncinya tidak pernah ikut ke pesan galat. */
+async function solveTurnstile(key: string): Promise<string> {
 
   const qs = new URLSearchParams({ apikey: key, url: PAGE, sitekey: TURNSTILE_SITEKEY, type: "min" });
   let res: Response;
   let data: J;
   try {
-    res = await fetch(`${SOLVER}?${qs}`, { headers: { "user-agent": UA, accept: "application/json" }, cache: "no-store", signal: AbortSignal.timeout(90_000) });
+    res = await fetch(`${SOLVER}?${qs}`, { headers: { "user-agent": UA, accept: "application/json" }, cache: "no-store", signal: AbortSignal.timeout(70_000) });
     data = obj(await res.json().catch(() => null));
   } catch (e) {
     const name = e instanceof Error ? e.name : "";
@@ -260,7 +330,7 @@ async function solveTurnstile(key: string): Promise<string> {
   if (token) return token;
   const msg = str(data.error) ?? str(data.message) ?? "";
   if (/paket|upgrade|premium|\bpro\b/i.test(msg)) {
-    throw new HttpError(503, "Order otomatis belum aktif: layanan pemecah Turnstile (api.izzxd.my.id) hanya untuk paket Pro, sedangkan kunci di server ini belum Pro. Sementara itu, kirim parameter 'token' berisi token Turnstile dari halaman zefame.com/free-services.");
+    throw new HttpError(503, `Order otomatis belum aktif: layanan pemecah Turnstile (api.izzxd.my.id) hanya untuk paket Pro, sedangkan kunci di server ini belum Pro. ${NO_TOKEN_HINT}`);
   }
   if (res.status === 401 || res.status === 403 || /api\s*-?key/i.test(msg)) {
     throw new HttpError(502, "Kunci layanan pemecah Turnstile (IZZXD_APIKEY) ditolak. Pemilik API perlu memeriksa konfigurasinya.");
@@ -354,24 +424,20 @@ export const zefameEndpoints: Endpoint[] = [
       const given = opt(sp, "token");
       if (given.length > 4000) throw new HttpError(400, "Parameter 'token' terlalu panjang.");
 
-      const key = process.env.IZZXD_APIKEY?.trim();
-      if (!given && !key) {
-        throw new HttpError(503, "Order otomatis belum aktif: IZZXD_APIKEY belum diatur di server. Sementara itu, kirim parameter 'token' berisi token Turnstile dari halaman zefame.com/free-services.");
-      }
       const ids = await resolveIds(link);
 
       // Sama seperti halaman Zefame: cek dulu, supaya token (dan jatah pemecahnya) tidak terbuang saat masih menunggu.
       const pre = await zf(`?${withIds(new URLSearchParams({ action: "check", device, service: String(service.id) }), ids)}`);
       if (!pre.success || pre.data.allowed === false) throw refused(pre, "Zefame belum menerima order ini");
 
-      const token = given || (await solveTurnstile(key!));
+      const token = given || (await autoToken());
 
       const form = withIds(new URLSearchParams({ service: String(service.id), link, uuid: device, cf_token: token }), ids);
-      const r = await zf("?action=order", form, 60_000);
+      const r = await zf("?action=order", form, 30_000);
       if (!r.success) {
         if (numv(r.data.timeLeft) === null && /access denied/i.test(r.message ?? "")) {
           if (given) throw new HttpError(400, "Token Turnstile ditolak Zefame (salah, sudah dipakai, atau kedaluwarsa). Ambil token baru lalu coba lagi.");
-          throw new HttpError(502, "Zefame menolak token Turnstile dari layanan pemecah. Coba lagi.");
+          throw new HttpError(502, "Zefame menolak token Turnstile dari pemecah otomatis. Coba lagi.");
         }
         throw refused(r, "Zefame menolak order");
       }

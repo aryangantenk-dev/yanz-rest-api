@@ -159,9 +159,17 @@ Tiga endpoint di kategori Tools, diadaptasi dari skrip Zefame Free Services buat
 | Cek bisa dipesan atau masih menunggu | `/api/tools/zefame-check?service=229&link=https://www.tiktok.com/@user/video/123` |
 | Kirim order | `/api/tools/zefame-order?service=229&link=https://www.tiktok.com/@user/video/123` |
 
-- Order dijaga Cloudflare Turnstile. Tokennya diambil dari parameter `token`, atau diminta otomatis ke layanan pemecah bila `IZZXD_APIKEY` diisi. Tanpa keduanya endpoint order menjawab 503.
+- Order dijaga Cloudflare Turnstile. Tokennya diambil, berurutan, dari: parameter `token`; pemecah di VPS sendiri (lihat di bawah); layanan pemecah izzxd bila `IZZXD_APIKEY` diisi. Tanpa satu pun endpoint order menjawab 503.
 - Zefame memberi masa tunggu per layanan (lihat `interval` di daftar layanan). Masa tunggu dihitung per perangkat, jadi kirim `device` (UUID) yang sama saat cek dan order. Order yang masih menunggu dijawab 429.
 - `link` berupa tautan lengkap atau username. Tautan pendek TikTok diuraikan lewat Zefame.
+
+Pemecah Turnstile di VPS sendiri memakai [EzSolver](https://github.com/ismoiloffS/EzSolver) (lisensi MIT, buatan Ismoiloff): Chrome asli + Xvfb. Ia tidak bisa berjalan di Vercel, jadi dipasang di VPS yang sama dengan film-proxy:
+
+1. Di VPS, jalankan `sudo SOLVER=1 bash scripts/film-proxy/install.sh`. Skrip memasang Chrome, Xvfb, dan EzSolver (versi yang sidik jarinya sudah dicatat di skrip), menguncinya ke `127.0.0.1`, lalu meminta satu token sungguhan untuk halaman Zefame dan mencetak hasilnya (`SOLVER TES: LOLOS` atau `GAGAL`). Butuh sekitar 1,2 GB disk dan RAM kosong kurang lebih 500 MB.
+2. Tidak ada env baru: endpoint order memanggil `POST {FILM_PROXY_URL}/solve` dengan `FILM_PROXY_KEY` yang sama. film-proxy hanya meneruskan permintaan untuk halaman di `SOLVE_HOSTS` (bawaan `zefame.com`).
+3. Uji ulang kapan saja dengan `sudo bash scripts/film-proxy/install.sh solver-test`; copot dengan `sudo SOLVER=0 bash scripts/film-proxy/install.sh`.
+
+Lolos atau tidaknya bergantung pada penilaian Cloudflare terhadap IP VPS; IP pusat data bisa saja ditolak.
 
 ## Scraper Komik (komiku.org)
 
@@ -254,7 +262,7 @@ LK21 tidak punya endpoint player: player videonya menolak diputar di luar situs 
 
 LK21 menolak IP server Vercel dan IP Supabase, jadi endpoint `lk21-*` dititipkan lewat server perantara ("film-proxy") di VPS milik sendiri:
 
-1. Di VPS Ubuntu, jalankan `scripts/film-proxy/install.sh` sebagai root (tambahkan `TUNNEL=1` bila port VPS tidak bisa dijangkau dari luar). Skrip mengetes dulu apakah IP VPS diterima, lalu memasang layanan `film-proxy` dan mencetak `PROXY_URL` serta `PROXY_KEY`.
+1. Di VPS Ubuntu, jalankan `scripts/film-proxy/install.sh` sebagai root (tambahkan `TUNNEL=1` bila port VPS tidak bisa dijangkau dari luar). Skrip mengetes dulu apakah IP VPS diterima, lalu memasang layanan `film-proxy` dan mencetak `PROXY_URL` serta `PROXY_KEY`. Skrip aman dijalankan ulang: kunci lama dipakai lagi, dan alamat tunnel yang masih hidup dipertahankan (`NEW_TUNNEL=1` untuk meminta alamat baru). Tambahkan `SOLVER=1` untuk sekaligus memasang pemecah Turnstile bagi `zefame-order` (lihat bagian Zefame).
 2. Isi env `FILM_PROXY_URL` dan `FILM_PROXY_KEY` di hosting dengan dua nilai itu, lalu deploy ulang.
 
 Tanpa kedua env itu endpoint `lk21-*` menjawab 503, dan menjawab 502 selama VPS mati. Pada mode terowongan alamatnya berganti setiap layanan dinyalakan ulang, jadi `FILM_PROXY_URL` harus ikut diperbarui.

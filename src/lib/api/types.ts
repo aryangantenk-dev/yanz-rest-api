@@ -12,6 +12,7 @@ export type CategoryId =
   | "search"
   | "downloader"
   | "games"
+  | "film"
   | "jkt48";
 
 export type Param = {

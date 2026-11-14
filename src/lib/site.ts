@@ -7,7 +7,7 @@ export const SITE_CREATOR = "yanz.api";
 export const SITE_PITCH = KEY_REQUIRED ? "gratis dengan API key" : "gratis tanpa API key";
 export const SITE_TAGLINE = KEY_REQUIRED ? "REST API Gratis untuk Developer Indonesia" : "REST API Gratis Tanpa API Key";
 export const SITE_DESCRIPTION =
-  `yanz.api adalah REST API ${SITE_PITCH} dengan 155 endpoint: AI chat, text to image, canvas (brat, iqc), downloader TikTok/Instagram/Facebook, pencarian Pinterest, game untuk bot WhatsApp, cuaca, gempa BMKG, Al-Qur'an, jadwal sholat, scraper komik & anime, data JKT48, dan banyak lagi. ${KEY_REQUIRED ? "Masuk dengan Google atau email untuk mendapat API key gratis. " : ""}Dokumentasi lengkap dengan playground interaktif.`;
+  `yanz.api adalah REST API ${SITE_PITCH} dengan 164 endpoint: AI chat, text to image, canvas (brat, iqc), downloader TikTok/Instagram/Facebook, pencarian Pinterest, game untuk bot WhatsApp, cuaca, gempa BMKG, Al-Qur'an, jadwal sholat, scraper komik & anime, film & serial (TMDB + player embed), data JKT48, dan banyak lagi. ${KEY_REQUIRED ? "Masuk dengan Google atau email untuk mendapat API key gratis. " : ""}Dokumentasi lengkap dengan playground interaktif.`;
 
 const vercelUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "";
 

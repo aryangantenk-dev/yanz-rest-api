@@ -1,6 +1,6 @@
 # yanz.api
 
-REST API gratis (155 endpoint) beserta dokumentasi dan playground interaktif. Bisa dijalankan terbuka tanpa API key, atau dengan login (Google / email + kode verifikasi) dan API key berawalan `yn-` untuk setiap pengguna. Dibangun dengan Next.js 16 (App Router).
+REST API gratis (164 endpoint) beserta dokumentasi dan playground interaktif. Bisa dijalankan terbuka tanpa API key, atau dengan login (Google / email + kode verifikasi) dan API key berawalan `yn-` untuk setiap pengguna. Dibangun dengan Next.js 16 (App Router).
 
 ## Menjalankan lokal
 
@@ -195,6 +195,28 @@ Contoh memasang player di halaman sendiri:
 ```
 
 Kedua scraper membaca HTML situs sumber, jadi bisa berhenti bekerja kalau situs tersebut mengubah tampilannya atau memblokir IP server.
+
+## Film & Serial (animekuy.web.id)
+
+| Endpoint | Keterangan |
+| --- | --- |
+| `/api/film/trending` | Film yang sedang ramai minggu ini. |
+| `/api/film/populer` | Film populer. |
+| `/api/film/series` | Serial TV populer. |
+| `/api/film/search?q=…&page=` | Cari film dan serial berdasarkan judul. |
+| `/api/film/detail?id=…&tipe=` | Sinopsis, genre, rating, durasi, poster, ID IMDb. Film langsung disertai link player. |
+| `/api/film/season?id=…&season=` | Daftar episode satu season serial. |
+| `/api/film/rekomendasi?id=…&tipe=` | Judul serupa. |
+| `/api/film/player?id=…&tipe=&season=&episode=` | URL embed dari Vidy, EmbedMaster, VidSrc, dan VidLink. |
+| `/api/film/embed?id=…&tipe=&season=&episode=&server=` | Halaman HTML berisi player, untuk dipakai langsung sebagai `src` iframe. |
+
+`id` adalah ID TMDB (angka, dari daftar atau pencarian) atau ID IMDb (`tt…`). Untuk ID TMDB, `tipe` (`movie` atau `series`) wajib diisi karena nomor film dan serial bisa sama; ID IMDb tidak membutuhkannya.
+
+Datanya dibaca dari Netlify Function milik animekuy.web.id (`/.netlify/functions/film`), yang meneruskan metadata TMDB. Videonya tidak di-host di sana maupun di sini: link player hanya URL embed penyedia pihak ketiga yang disusun dari ID judul, sama seperti yang dipasang halaman Animekuy. Ada tidaknya video, subtitle, dan iklan bergantung pada penyedia itu.
+
+Tiap panggilan memakai jatah Netlify Functions situs sumber, jadi jawaban disimpan di memori server (daftar dan pencarian 10 menit, daftar episode 1 jam, detail dan rekomendasi 6 jam) dan panggilan keluar dibatasi 60 per menit; saat padat endpoint menjawab 429.
+
+This product uses the TMDB API but is not endorsed or certified by TMDB.
 
 ## JKT48 (jkt48.com)
 

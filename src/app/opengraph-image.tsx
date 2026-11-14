@@ -29,7 +29,7 @@ export default function OgImage() {
         </div>
         <div style={{ display: "flex", flexDirection: "column" }}>
           <div style={{ fontSize: 84, fontWeight: 800, lineHeight: 1.05, letterSpacing: -2, display: "flex", flexWrap: "wrap" }}>{endpoints.length} endpoint REST API. {KEY_REQUIRED ? "Gratis, cukup satu API key." : "Gratis, tanpa API key."}</div>
-          <div style={{ marginTop: 28, fontSize: 30, color: muted, display: "flex" }}>AI, downloader, canvas, data BMKG, Al-Qur&apos;an, komik, dan anime dalam satu base URL.</div>
+          <div style={{ marginTop: 28, fontSize: 30, color: muted, display: "flex" }}>AI, downloader, canvas, data BMKG, Al-Qur&apos;an, komik, anime, dan film dalam satu base URL.</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", borderTop: `2px solid ${line}`, paddingTop: 28, fontSize: 28 }}>
           <div style={{ display: "flex", color: greenText, fontWeight: 700, marginRight: 18 }}>GET</div>

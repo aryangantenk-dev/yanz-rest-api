@@ -116,7 +116,7 @@ export default function Home() {
               {meta.length} endpoint REST API. {KEY_REQUIRED ? "Gratis, cukup satu API key." : "Gratis, tanpa API key."}
             </h1>
             <p className="mt-6 max-w-[60ch] text-lg text-muted">
-              {`${SITE_NAME} menyatukan AI, downloader, canvas, pencarian, data BMKG, Al-Qur'an, komik, dan anime dalam satu base URL. ${KEY_REQUIRED ? "Masuk sekali untuk mendapat API key gratis, lalu" : "Tidak perlu daftar:"} salin URL, kirim GET, terima JSON.`}
+              {`${SITE_NAME} menyatukan AI, downloader, canvas, pencarian, data BMKG, Al-Qur'an, komik, anime, dan film dalam satu base URL. ${KEY_REQUIRED ? "Masuk sekali untuk mendapat API key gratis, lalu" : "Tidak perlu daftar:"} salin URL, kirim GET, terima JSON.`}
             </p>
 
             <div className="mt-8">

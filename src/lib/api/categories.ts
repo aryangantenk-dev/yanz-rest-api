@@ -101,6 +101,13 @@ export const categories: Category[] = [
     seoTitle: "REST API Anime: Scraper Animekuindo, Link Player & Embed",
   },
   {
+    id: "film",
+    name: "Film",
+    tagline: "Film & serial dari Animekuy",
+    description: "Data film dan serial dari animekuy.web.id (metadata TMDB): trending, populer, pencarian, detail, daftar episode, rekomendasi, dan link player siap pasang di iframe dari Vidy, EmbedMaster, VidSrc, dan VidLink.",
+    seoTitle: "REST API Film & Serial: Data TMDB, Episode, Link Player Embed",
+  },
+  {
     id: "jkt48",
     name: "JKT48",
     tagline: "Member, jadwal & berita",

@@ -6,7 +6,7 @@ import { SITE_NAME, SITE_PITCH, SITE_URL } from "@/lib/site";
 export const metadata: Metadata = {
   title: "Dokumentasi REST API Lengkap dengan Playground",
   description:
-    "Dokumentasi seluruh endpoint yanz.api: AI, tools, text, image, canvas, random, search, downloader, games, islami, informasi, komik, anime, dan film. Coba langsung di browser dan salin kode cURL, JavaScript, Python, PHP." + ` REST API ${SITE_PITCH}.`,
+    "Dokumentasi seluruh endpoint yanz.api: AI, tools, text, image, canvas, random, search, downloader, games, islami, informasi, komik, anime, film, dan JKT48. Coba langsung di browser dan salin kode cURL, JavaScript, Python, PHP." + ` REST API ${SITE_PITCH}.`,
   alternates: { canonical: "/docs" },
   openGraph: { url: "/docs", title: "Dokumentasi REST API yanz.api", description: "Semua endpoint, parameter, dan playground interaktif." },
 };

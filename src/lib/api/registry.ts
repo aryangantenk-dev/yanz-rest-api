@@ -16,6 +16,7 @@ import { gamesEndpoints } from "./games";
 import { mediaToolEndpoints } from "./mediatools";
 import { web2apkEndpoints } from "./web2apk";
 import { toUrlEndpoints } from "./tourl";
+import { jkt48Endpoints } from "./jkt48";
 import { categories } from "./categories";
 
 export const endpoints: Endpoint[] = [
@@ -33,6 +34,7 @@ export const endpoints: Endpoint[] = [
   ...komikEndpoints,
   ...animeEndpoints,
   ...filmEndpoints,
+  ...jkt48Endpoints,
   // Kategorinya beragam; urutan per kategori diatur ulang oleh allMeta().
   ...mediaToolEndpoints,
   ...web2apkEndpoints,

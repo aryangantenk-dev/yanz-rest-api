@@ -1,6 +1,6 @@
 # yanz.api
 
-REST API gratis (163 endpoint) beserta dokumentasi dan playground interaktif. Bisa dijalankan terbuka tanpa API key, atau dengan login (Google / email + kode verifikasi) dan API key berawalan `yn-` untuk setiap pengguna. Dibangun dengan Next.js 16 (App Router).
+REST API gratis (171 endpoint) beserta dokumentasi dan playground interaktif. Bisa dijalankan terbuka tanpa API key, atau dengan login (Google / email + kode verifikasi) dan API key berawalan `yn-` untuk setiap pengguna. Dibangun dengan Next.js 16 (App Router).
 
 ## Menjalankan lokal
 
@@ -243,3 +243,20 @@ LK21 menolak IP server Vercel dan IP Supabase, jadi endpoint `lk21-*` dititipkan
 2. Isi env `FILM_PROXY_URL` dan `FILM_PROXY_KEY` di hosting dengan dua nilai itu, lalu deploy ulang.
 
 Tanpa kedua env itu endpoint `lk21-*` menjawab 503, dan menjawab 502 selama VPS mati. Pada mode terowongan alamatnya berganti setiap layanan dinyalakan ulang, jadi `FILM_PROXY_URL` harus ikut diperbarui.
+
+## JKT48 (jkt48.com)
+
+| Endpoint | Keterangan |
+| --- | --- |
+| `/api/jkt48/member?tim=` | Semua member: nama, panggilan, tim, status, foto. `tim` opsional: `love`, `dream`, `passion`, `trainee`. |
+| `/api/jkt48/member-detail?id=…` | Profil satu member: tanggal lahir, umur, golongan darah, tinggi, zodiak, media sosial. `id` boleh angka (`31`), slug (`aurellia-31`), URL profil, atau nama/panggilan (`freya`). |
+| `/api/jkt48/schedule?bulan=&tahun=&tipe=` | Jadwal satu bulan (default bulan ini). `tipe`: `show`, `event`, `exclusive`, `general`. |
+| `/api/jkt48/schedule-detail?id=…` | Detail satu jadwal: lineup, member yang seitansai, harga tiket, masa penjualan, sesi acara eksklusif. |
+| `/api/jkt48/theater?limit=` | Show theater mulai hari ini beserta lineup dan seitansai (maks 10). |
+| `/api/jkt48/news?page=&limit=` | Berita dan pengumuman resmi, terbaru lebih dulu. |
+| `/api/jkt48/news-detail?id=…` | Isi satu berita sebagai teks dan HTML. |
+| `/api/jkt48/birthday?limit=&bulan=` | Ulang tahun member terdekat, atau semua yang lahir di `bulan` tertentu. |
+
+Halaman HTML jkt48.com dijaga tantangan Cloudflare, jadi yang dibaca adalah API JSON publik milik situs itu sendiri (`https://jkt48.com/api/v1/...`, yang juga dipanggil halamannya di browser) dengan header `X-Request-Id` seperti yang dikirim halaman aslinya. Hanya data tanpa login yang diambil; tidak ada yang menyentuh akun, tiket, atau pembayaran. Semua tanggal dan jam memakai WIB.
+
+Supaya tidak membebani sumber, jawaban disimpan di memori server (daftar member 30 menit, profil 12 jam, jadwal dan berita 5 menit) dan panggilan keluar dibatasi 60 per menit; saat padat endpoint menjawab 429. `birthday` membaca profil tiap member sekali lalu memakai simpanan itu, jadi panggilan pertamanya butuh beberapa detik. Kalau jkt48.com mengubah perlindungannya, endpoint menjawab 502 dengan keterangan "perlindungan anti-bot".

@@ -107,6 +107,13 @@ export const categories: Category[] = [
     description: "Data film dan serial dari Sankanime Movies: pencarian, trending, detail lengkap dengan pemeran, daftar episode, player video siap pasang, link stream dan unduhan. Ditambah scraper LK21 (Layarkaca21) untuk beranda, daftar, genre, detail, dan pemeran.",
     seoTitle: "REST API Film: Sankanime & LK21, Player Video, Detail & Pemeran",
   },
+  {
+    id: "jkt48",
+    name: "JKT48",
+    tagline: "Member, jadwal & berita",
+    description: "Data dari situs resmi jkt48.com: daftar dan profil member, jadwal bulanan, jadwal theater lengkap dengan lineup dan seitansai, berita, serta ulang tahun member terdekat.",
+    seoTitle: "REST API JKT48: Member, Jadwal Theater, Berita, Ulang Tahun",
+  },
 ];
 
 export const categoryById = Object.fromEntries(categories.map((c) => [c.id, c])) as Record<CategoryId, Category>;

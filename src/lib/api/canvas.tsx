@@ -584,6 +584,12 @@ function MenuRow({ label, danger, last, children }: { label: string; danger?: bo
  */
 const WMP_SOURCE = "https://apii.nexadev.my.id";
 const WMP_MAX_BYTES = 4 * 1024 * 1024;
+const WMP_TRIES = 3;
+const WMP_CACHE_MAX = 30;
+const WMP_CACHE_MS = 60 * 60 * 1000;
+
+type WmpImage = { buf: Uint8Array; type: string; at: number };
+const wmpCache = new Map<string, WmpImage>();
 
 function wmpText(sp: URLSearchParams): string {
   const lines = cleanText(need(sp, "text", 300))
@@ -595,6 +601,49 @@ function wmpText(sp: URLSearchParams): string {
   return lines.join("|");
 }
 
+const wmpWait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/*
+ * Sumbernya sesekali memutus koneksi (terlihat saat uji: permintaan pertama gagal, permintaan
+ * berikutnya lancar), jadi kegagalan jaringan dan status 5xx dicoba ulang sebelum menyerah.
+ */
+async function wmpFetch(skin: 1 | 2, text: string): Promise<WmpImage> {
+  const url = `${WMP_SOURCE}/wmp${skin}?text=${encodeURIComponent(text)}`;
+  let failure = new HttpError(502, "Gagal menghubungi pembuat gambar WMP.");
+  for (let attempt = 0; attempt < WMP_TRIES; attempt++) {
+    if (attempt) await wmpWait(350 * attempt);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(12000),
+        headers: { "user-agent": "YanzAPI/1.0", accept: "image/*" },
+      });
+    } catch (e) {
+      const slow = e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError");
+      failure = slow ? new HttpError(504, "Pembuat gambar WMP terlalu lama merespons. Coba lagi.") : new HttpError(502, "Gagal menghubungi pembuat gambar WMP.");
+      continue;
+    }
+    const type = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+    if (res.ok && /^image\/(jpeg|png|webp)$/.test(type)) {
+      let buf: Uint8Array;
+      try {
+        buf = new Uint8Array(await res.arrayBuffer());
+      } catch {
+        failure = new HttpError(502, "Koneksi ke pembuat gambar WMP terputus di tengah jalan.");
+        continue;
+      }
+      if (!buf.byteLength || buf.byteLength > WMP_MAX_BYTES) throw new HttpError(502, "Pembuat gambar WMP mengirim gambar yang tidak wajar ukurannya.");
+      return { buf, type, at: Date.now() };
+    }
+    await res.body?.cancel().catch(() => {});
+    if (res.status === 429) throw new HttpError(429, "Pembuat gambar WMP sedang membatasi permintaan. Coba lagi beberapa saat lagi.");
+    failure = new HttpError(502, res.ok ? "Pembuat gambar WMP tidak mengirim gambar." : `Pembuat gambar WMP merespons dengan status ${res.status}.`);
+    if (res.status < 500) break;
+  }
+  throw failure;
+}
+
 function wmpEndpoint(skin: 1 | 2, size: string): Endpoint {
   return {
     category: "canvas", slug: `wmp${skin}`, kind: "image",
@@ -603,26 +652,15 @@ function wmpEndpoint(skin: 1 | 2, size: string): Endpoint {
     params: [{ name: "text", required: true, description: "Teks, tiap baris dipisah tanda | (maks 300 karakter, 12 baris).", example: "ngapain cemburu|kan|cuman sebatas|teman" }],
     handler: async ({ sp }) => {
       const text = wmpText(sp);
-      let res: Response;
-      try {
-        res = await fetch(`${WMP_SOURCE}/wmp${skin}?text=${encodeURIComponent(text)}`, {
-          cache: "no-store",
-          signal: AbortSignal.timeout(25000),
-          headers: { "user-agent": "YanzAPI/1.0", accept: "image/*" },
-        });
-      } catch (e) {
-        if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) throw new HttpError(504, "Pembuat gambar WMP terlalu lama merespons. Coba lagi.");
-        throw new HttpError(502, "Gagal menghubungi pembuat gambar WMP.");
+      const key = `${skin}:${text}`;
+      let img = wmpCache.get(key);
+      if (!img || Date.now() - img.at > WMP_CACHE_MS) {
+        img = await wmpFetch(skin, text);
+        wmpCache.delete(key);
+        wmpCache.set(key, img);
+        while (wmpCache.size > WMP_CACHE_MAX) wmpCache.delete(wmpCache.keys().next().value as string);
       }
-      const type = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
-      if (!res.ok || !/^image\/(jpeg|png|webp)$/.test(type)) {
-        await res.body?.cancel();
-        if (res.status === 429) throw new HttpError(429, "Pembuat gambar WMP sedang membatasi permintaan. Coba lagi beberapa saat lagi.");
-        throw new HttpError(502, res.ok ? "Pembuat gambar WMP tidak mengirim gambar." : `Pembuat gambar WMP merespons dengan status ${res.status}.`);
-      }
-      const buf = new Uint8Array(await res.arrayBuffer());
-      if (!buf.byteLength || buf.byteLength > WMP_MAX_BYTES) throw new HttpError(502, "Pembuat gambar WMP mengirim gambar yang tidak wajar ukurannya.");
-      return binaryResponse(buf, type, "public, max-age=86400");
+      return binaryResponse(img.buf, img.type, "public, max-age=86400");
     },
   };
 }

@@ -17,6 +17,7 @@ import { mediaToolEndpoints } from "./mediatools";
 import { web2apkEndpoints } from "./web2apk";
 import { toUrlEndpoints } from "./tourl";
 import { jkt48Endpoints } from "./jkt48";
+import { zefameEndpoints } from "./zefame";
 import { categories } from "./categories";
 
 export const endpoints: Endpoint[] = [
@@ -39,6 +40,7 @@ export const endpoints: Endpoint[] = [
   ...mediaToolEndpoints,
   ...web2apkEndpoints,
   ...toUrlEndpoints,
+  ...zefameEndpoints,
 ];
 
 const index = new Map(endpoints.map((e) => [`${e.category}/${e.slug}`, e]));

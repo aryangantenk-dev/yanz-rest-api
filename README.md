@@ -1,6 +1,6 @@
 # yanz.api
 
-REST API gratis (171 endpoint) beserta dokumentasi dan playground interaktif. Bisa dijalankan terbuka tanpa API key, atau dengan login (Google / email + kode verifikasi) dan API key berawalan `yn-` untuk setiap pengguna. Dibangun dengan Next.js 16 (App Router).
+REST API gratis (174 endpoint) beserta dokumentasi dan playground interaktif. Bisa dijalankan terbuka tanpa API key, atau dengan login (Google / email + kode verifikasi) dan API key berawalan `yn-` untuk setiap pengguna. Dibangun dengan Next.js 16 (App Router).
 
 ## Menjalankan lokal
 
@@ -26,6 +26,7 @@ Kode berada langsung di root repository, jadi Vercel maupun Netlify mendeteksiny
 | `BAN_AFTER_STRIKES` | Jumlah pelanggaran dalam 10 menit sebelum IP diblokir permanen. Default `3`. |
 | `OWNER_WHATSAPP` | Nomor WhatsApp owner untuk banding blokir. Default `62895403334081`. |
 | `WEB2APK_API_KEY` | Kunci API dari akunmu sendiri di layanan pembuat APK, untuk `/api/tools/web2apk`. Akun gratis mendapat 3 build per hari. Tanpa ini endpoint berjalan sebagai tamu (1 build per hari per alamat IP server), lalu menjawab 429. |
+| `IZZXD_APIKEY` | API key layanan pemecah Turnstile `api.izzxd.my.id`, untuk `/api/tools/zefame-order`. Tanpa ini order hanya berjalan bila pemanggil mengirim token Turnstile sendiri lewat parameter `token`; selain itu endpoint menjawab 503. |
 | `IMAGE_TTL_DAYS` | Berapa hari gambar unggahan (`/api/tools/tourl`) disimpan sebelum dihapus otomatis. Default `30`; `0` berarti selamanya. Fitur ini butuh `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`. |
 | `IMAGE_BUCKET` | Nama bucket Supabase Storage untuk gambar unggahan. Default `yanz-images`; dibuat otomatis. |
 | `AUTH_SECRET` | Kunci acak minimal 32 karakter untuk menandatangani sesi login dan kode verifikasi. Wajib agar login aktif. |
@@ -147,6 +148,20 @@ Unggah gambar, dapat tautan yang bisa dibagikan di domain sendiri (`/i/<kode>.<e
 - Disimpan di Supabase Storage (bucket privat) selama `IMAGE_TTL_DAYS` hari, lalu dihapus otomatis.
 - Batas unggah 10 gambar per 10 menit per IP, di luar batas permintaan umum.
 - Owner bisa melihat 100 unggahan terbaru di `/api/admin/images?key=…` dan menghapus satu gambar dengan `/api/admin/delimage?name=<nama berkas>&key=…`. Gambar yang dihapus bisa masih tampil dari cache paling lama satu jam.
+
+## Layanan gratis Zefame
+
+Tiga endpoint di kategori Tools, diadaptasi dari skrip Zefame Free Services buatan IzzXd (kredit dan saluran pembuatnya ada di kepala `src/lib/api/zefame.ts`; jangan dihapus).
+
+| Kebutuhan | Endpoint |
+| --- | --- |
+| Daftar layanan dan id-nya | `/api/tools/zefame-services?platform=tiktok` |
+| Cek bisa dipesan atau masih menunggu | `/api/tools/zefame-check?service=229&link=https://www.tiktok.com/@user/video/123` |
+| Kirim order | `/api/tools/zefame-order?service=229&link=https://www.tiktok.com/@user/video/123` |
+
+- Order dijaga Cloudflare Turnstile. Tokennya diambil dari parameter `token`, atau diminta otomatis ke layanan pemecah bila `IZZXD_APIKEY` diisi. Tanpa keduanya endpoint order menjawab 503.
+- Zefame memberi masa tunggu per layanan (lihat `interval` di daftar layanan). Masa tunggu dihitung per perangkat, jadi kirim `device` (UUID) yang sama saat cek dan order. Order yang masih menunggu dijawab 429.
+- `link` berupa tautan lengkap atau username. Tautan pendek TikTok diuraikan lewat Zefame.
 
 ## Scraper Komik (komiku.org)
 

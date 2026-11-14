@@ -450,6 +450,10 @@ details[open] > .faq-body {
 
 /* ---------- Keyframes ---------- */
 /* Bagian "gagal" pada diagram dashboard: bergaris, supaya tidak dibedakan lewat warna saja. */
+.tick {
+  animation: tick 1.2s ease-out;
+}
+
 .bar-failed {
   background-image: repeating-linear-gradient(135deg, var(--danger) 0 3px, transparent 3px 6px);
   box-shadow: inset 0 0 0 1px var(--danger);
@@ -465,6 +469,10 @@ details[open] > .faq-body {
 }
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+/* Angka dashboard yang baru saja berubah: disorot sebentar lalu kembali ke warna teks. */
+@keyframes tick {
+  from { color: var(--ok); }
 }
 
 /* ---------- Gerak dikurangi ---------- */

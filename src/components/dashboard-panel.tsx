@@ -26,6 +26,19 @@ type Usage = {
 };
 
 const LOGIN_HREF = "/login?next=/dashboard";
+/** Jeda pembaruan otomatis. Saat gagal, jedanya digandakan sampai paling lama POLL_MAX_MS. */
+const POLL_MS = 10_000;
+const POLL_MAX_MS = 60_000;
+/** Jarak minimum antara dua pembaruan yang dipicu oleh kembalinya fokus ke tab. */
+const WAKE_GAP_MS = 2_000;
+const AUTO_KEY = "yanz:dash-auto";
+const readAuto = () => {
+  try {
+    return window.localStorage.getItem(AUTO_KEY) !== "0";
+  } catch {
+    return true;
+  }
+};
 const mask = (key: string) => `${key.slice(0, 3)}${"•".repeat(12)}${key.slice(-4)}`;
 const nf = new Intl.NumberFormat("id-ID");
 const fmt = (n: number) => nf.format(n);
@@ -219,10 +232,27 @@ function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(true);
   const [at, setAt] = useState<string>("");
+  // Stats hanya dirender di browser (setelah sesi dimuat), jadi aman membaca localStorage di sini.
+  const [auto, setAuto] = useState(readAuto);
+  /** Pembaruan otomatis terakhir gagal: angka di layar mungkin sudah tertinggal. */
+  const [stale, setStale] = useState(false);
+  /** Jumlah pemuatan yang berhasil; angka baru disorot hanya setelah pemuatan pertama. */
+  const [loads, setLoads] = useState(0);
+  /** Hanya pembaruan manual yang diumumkan ke pembaca layar, supaya tidak berbunyi tiap beberapa detik. */
+  const [announce, setAnnounce] = useState("");
   const alive = useRef(true);
+  const running = useRef<Promise<void> | null>(null);
+  const failures = useRef(0);
+  const lastTry = useRef(0);
 
-  const load = useCallback(async () => {
-    setBusy(true);
+  const run = useCallback(async (silent: boolean) => {
+    lastTry.current = Date.now();
+    const failed = (message: string) => {
+      failures.current += 1;
+      // Pembaruan otomatis yang gagal tidak menimpa layar dengan pesan galat; cukup tandai datanya tertinggal.
+      if (silent) setStale(true);
+      else setError(message);
+    };
     try {
       const r = await fetch("/api/auth/usage", { cache: "no-store", credentials: "same-origin" });
       const body = (await r.json().catch(() => ({}))) as { usage?: Usage; limit?: number; error?: string };
@@ -233,19 +263,40 @@ function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
         return;
       }
       if (!r.ok || !body.usage) {
-        setError(body.error ?? "Statistik belum bisa dimuat. Coba lagi.");
+        failed(body.error ?? "Statistik belum bisa dimuat. Coba lagi.");
         return;
       }
+      failures.current = 0;
+      const time = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
       setUsage(body.usage);
       setLimit(body.limit ?? null);
       setError(null);
-      setAt(new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }));
+      setStale(false);
+      setAt(time);
+      setLoads((n) => n + 1);
+      if (!silent) setAnnounce(`Statistik diperbarui pukul ${time}`);
     } catch {
-      if (alive.current) setError("Tidak dapat terhubung ke server. Periksa koneksimu, lalu coba lagi.");
-    } finally {
-      if (alive.current) setBusy(false);
+      if (alive.current) failed("Tidak dapat terhubung ke server. Periksa koneksimu, lalu coba lagi.");
     }
   }, []);
+
+  /** Satu permintaan pada satu waktu. Pembaruan otomatis menumpang pada yang sedang berjalan; yang manual mengantre sesudahnya. */
+  const load = useCallback(
+    (silent = false) => {
+      const prev = running.current;
+      if (prev && silent) return prev;
+      if (!silent) setBusy(true);
+      const next: Promise<void> = (prev ?? Promise.resolve())
+        .then(() => run(silent))
+        .finally(() => {
+          if (running.current === next) running.current = null;
+          if (alive.current && !silent) setBusy(false);
+        });
+      running.current = next;
+      return next;
+    },
+    [run],
+  );
 
   useEffect(() => {
     alive.current = true;
@@ -255,6 +306,50 @@ function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
       alive.current = false;
     };
   }, [load]);
+
+  // Pembaruan otomatis: hanya selama tab terlihat, dan langsung menyusul begitu tab dibuka lagi.
+  useEffect(() => {
+    if (!auto) return;
+    let stopped = false;
+    let timer: number | undefined;
+    const schedule = () => {
+      window.clearTimeout(timer);
+      if (stopped || document.visibilityState !== "visible") return;
+      const wait = Math.min(POLL_MS * 2 ** failures.current, POLL_MAX_MS);
+      timer = window.setTimeout(() => void load(true).then(schedule), wait);
+    };
+    const wake = () => {
+      if (document.visibilityState !== "visible") {
+        window.clearTimeout(timer);
+        return;
+      }
+      if (Date.now() - lastTry.current < WAKE_GAP_MS) return;
+      void load(true).then(schedule);
+    };
+    schedule();
+    document.addEventListener("visibilitychange", wake);
+    window.addEventListener("focus", wake);
+    window.addEventListener("online", wake);
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", wake);
+      window.removeEventListener("focus", wake);
+      window.removeEventListener("online", wake);
+    };
+  }, [auto, load]);
+
+  const toggleAuto = () => {
+    const next = !auto;
+    setAuto(next);
+    try {
+      window.localStorage.setItem(AUTO_KEY, next ? "1" : "0");
+    } catch {
+      // Penyimpanan diblokir: pilihan hanya berlaku sampai halaman ditutup.
+    }
+    // Menyalakan lagi: langsung susul angka yang tertinggal.
+    if (next) void load(true);
+  };
 
   const rate = usage && usage.month > 0 ? Math.round(((usage.month - usage.month_errors) / usage.month) * 1000) / 10 : null;
   const tiles = usage
@@ -291,8 +386,26 @@ function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
       </header>
 
       <p role="status" className={error ? "border border-danger p-3 text-sm font-medium text-danger" : "sr-only"}>
-        {error ?? (usage && at ? `Statistik diperbarui pukul ${at}` : "")}
+        {error ?? announce}
       </p>
+
+      {usage && (
+        <div className="flex flex-col gap-x-4 gap-y-1 border border-line bg-card py-1 pl-4 pr-2 sm:flex-row sm:items-center sm:justify-between">
+          <p id="dash-auto-info" className="flex items-center gap-2.5 py-2 text-sm text-muted sm:py-0">
+            <span aria-hidden className={`block h-2.5 w-2.5 shrink-0 ${stale ? "bar-failed" : auto ? "bg-ok" : "border border-control"}`} />
+            <span>
+              {stale ? "Gagal memperbarui, dicoba lagi otomatis. " : auto ? `Diperbarui otomatis tiap ${POLL_MS / 1000} detik. ` : "Pembaruan otomatis dijeda. "}
+              <span className="tnum whitespace-nowrap">Terakhir pukul {at}</span>
+            </span>
+          </p>
+          <button type="button" role="switch" aria-checked={auto} aria-describedby="dash-auto-info" onClick={toggleAuto} className="flex min-h-11 shrink-0 cursor-pointer items-center justify-between gap-3 px-2 text-sm font-semibold hover:bg-subtle">
+            Perbarui otomatis
+            <span aria-hidden className={`flex h-6 w-11 shrink-0 items-center border p-0.5 transition-colors duration-150 ${auto ? "border-[var(--accent-edge)] bg-accent" : "border-control bg-bg"}`}>
+              <span className={`block h-full w-[1.125rem] transition-transform duration-150 ${auto ? "translate-x-5 bg-onaccent" : "bg-muted"}`} />
+            </span>
+          </button>
+        </div>
+      )}
 
       {!usage ? (
         error ? null : (
@@ -305,7 +418,10 @@ function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
               <div key={t.label} className="border border-line bg-card p-4">
                 <dt className="text-sm text-muted">{t.label}</dt>
                 <dd className="mt-1">
-                  <span className="tnum block font-mono text-[1.75rem] font-bold leading-tight sm:text-[2rem]">{fmt(t.value)}</span>
+                  {/* key = nilainya: saat angka berubah elemen dibuat ulang sehingga sorotannya berjalan lagi. */}
+                  <span key={t.value} className={`tnum block font-mono text-[1.75rem] font-bold leading-tight sm:text-[2rem] ${loads > 1 ? "tick" : ""}`}>
+                    {fmt(t.value)}
+                  </span>
                   <span className="tnum mt-1 block text-sm text-muted">{t.note}</span>
                 </dd>
               </div>
@@ -317,7 +433,7 @@ function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
               <h2 id="dash-kosong" className="font-mono text-xl font-bold">
                 Belum ada permintaan yang tercatat
               </h2>
-              <p className="mt-2 max-w-[60ch] text-muted">Statistik mulai dihitung dari permintaan berikutnya yang memakai API key kamu. Coba satu endpoint di dokumentasi, lalu tekan Perbarui di sini.</p>
+              <p className="mt-2 max-w-[60ch] text-muted">Statistik mulai dihitung dari permintaan berikutnya yang memakai API key kamu. Coba satu endpoint di dokumentasi; angkanya akan muncul di sini dengan sendirinya.</p>
               <Link href="/docs" className="btn btn-primary mt-5 w-full sm:w-auto">
                 Coba endpoint pertama
                 <ArrowIcon />

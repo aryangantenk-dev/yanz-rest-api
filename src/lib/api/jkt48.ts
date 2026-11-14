@@ -33,6 +33,8 @@ const notNull = <T>(v: T | null): v is T => v !== null;
 
 const MIN = 60_000;
 const MAX_PER_MINUTE = 60;
+/** Jeda (ms) sebelum tiap percobaan ulang saat jkt48.com menolak dengan tantangan anti-bot. */
+const RETRY_WAITS = [250, 700, 1500];
 const cache = new Map<string, { at: number; ttl: number; data: J }>();
 const inflight = new Map<string, Promise<J>>();
 const calls: number[] = [];
@@ -65,13 +67,11 @@ async function jktGet(path: string, query: Record<string, string | number | unde
   const job = (async () => {
     const url = `${API}${key}`;
     const accept = "application/json, text/plain, */*";
-    let status: number;
-    let type: string;
-    let text: string;
-    if (proxyConfigured("sanka")) {
-      const r = await viaProxy(url, { via: "sanka", label: "Server perantara JKT48", accept, referer: `${SITE}/`, requestId: true, timeoutMs: 20000 });
-      ({ status, type, text } = r);
-    } else {
+    const viaSanka = proxyConfigured("sanka");
+    const once = async (): Promise<{ status: number; type: string; text: string }> => {
+      if (viaSanka) {
+        return viaProxy(url, { via: "sanka", label: "Server perantara JKT48", accept, referer: `${SITE}/`, requestId: true, timeoutMs: 20000 });
+      }
       let res: Response;
       try {
         res = await fetch(url, {
@@ -85,12 +85,21 @@ async function jktGet(path: string, query: Record<string, string | number | unde
         if (name === "TimeoutError" || name === "AbortError") throw new HttpError(504, "jkt48.com terlalu lama merespons.");
         throw new HttpError(502, "Gagal menghubungi jkt48.com.");
       }
-      status = res.status;
-      type = res.headers.get("content-type") ?? "";
-      text = await res.text();
+      return { status: res.status, type: res.headers.get("content-type") ?? "", text: await res.text() };
+    };
+    const blocked = (r: { type: string; text: string }): boolean => /^\s*</.test(r.text) || !/json/i.test(r.type);
+
+    // Sebagian alamat keluar perantara masih terkena tantangan anti-bot, tetapi panggilan
+    // berikutnya biasanya lolos. Jadi penolakan (bukan galat lain) dicoba ulang sebentar.
+    let r = await once();
+    for (const wait of viaSanka ? RETRY_WAITS : []) {
+      if (!blocked(r) || (r.status !== 403 && r.status !== 503)) break;
+      await new Promise((done) => setTimeout(done, wait));
+      r = await once();
     }
+    const { status, type, text } = r;
     const ok = status >= 200 && status < 300;
-    if (/^\s*</.test(text) || !/json/i.test(type)) {
+    if (blocked({ type, text })) {
       throw new HttpError(502, `jkt48.com menolak permintaan dari server ini (HTTP ${status}, perlindungan anti-bot). Coba lagi beberapa saat lagi.`);
     }
     let body: J;

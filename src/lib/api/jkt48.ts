@@ -3,12 +3,17 @@ import type { Endpoint } from "./types";
 import { HttpError } from "./types";
 import { need, opt } from "./helpers";
 import { cleanSlug } from "./scrape";
+import { proxyConfigured, viaProxy } from "./filmproxy";
 
 /*
  * Sumber: https://jkt48.com (situs resmi, versi 2025+).
  * Halaman HTML-nya dijaga tantangan Cloudflare, jadi yang dibaca adalah API JSON
  * publik yang dipakai situs itu sendiri (/api/v1/...), dengan header yang sama
  * seperti yang dikirim halamannya (X-Request-Id). Hanya endpoint tanpa login.
+ *
+ * jkt48.com menolak IP server Vercel walau headernya sama, tetapi menerima Supabase
+ * Edge Function. Jadi bila perantara "sanka" (supabase/functions/film-proxy) sudah
+ * diatur, panggilan dititipkan lewat sana; tanpa itu dipanggil langsung.
  */
 const SITE = "https://jkt48.com";
 const API = `${SITE}/api/v1`;
@@ -58,28 +63,35 @@ async function jktGet(path: string, query: Record<string, string | number | unde
   }
 
   const job = (async () => {
-    let res: Response;
-    try {
-      res = await fetch(`${API}${key}`, {
-        cache: "no-store",
-        redirect: "follow",
-        signal: AbortSignal.timeout(12000),
-        headers: {
-          "user-agent": UA,
-          accept: "application/json, text/plain, */*",
-          "accept-language": "id-ID,id;q=0.9,en;q=0.8",
-          referer: `${SITE}/`,
-          "x-request-id": crypto.randomUUID(),
-        },
-      });
-    } catch (e) {
-      const name = e instanceof Error ? e.name : "";
-      if (name === "TimeoutError" || name === "AbortError") throw new HttpError(504, "jkt48.com terlalu lama merespons.");
-      throw new HttpError(502, "Gagal menghubungi jkt48.com.");
+    const url = `${API}${key}`;
+    const accept = "application/json, text/plain, */*";
+    let status: number;
+    let type: string;
+    let text: string;
+    if (proxyConfigured("sanka")) {
+      const r = await viaProxy(url, { via: "sanka", label: "Server perantara JKT48", accept, referer: `${SITE}/`, requestId: true, timeoutMs: 20000 });
+      ({ status, type, text } = r);
+    } else {
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          cache: "no-store",
+          redirect: "follow",
+          signal: AbortSignal.timeout(12000),
+          headers: { "user-agent": UA, accept, "accept-language": "id-ID,id;q=0.9,en;q=0.8", referer: `${SITE}/`, "x-request-id": crypto.randomUUID() },
+        });
+      } catch (e) {
+        const name = e instanceof Error ? e.name : "";
+        if (name === "TimeoutError" || name === "AbortError") throw new HttpError(504, "jkt48.com terlalu lama merespons.");
+        throw new HttpError(502, "Gagal menghubungi jkt48.com.");
+      }
+      status = res.status;
+      type = res.headers.get("content-type") ?? "";
+      text = await res.text();
     }
-    const text = await res.text();
-    if (/^\s*</.test(text) || !/json/i.test(res.headers.get("content-type") ?? "")) {
-      throw new HttpError(502, `jkt48.com menolak permintaan dari server ini (HTTP ${res.status}, perlindungan anti-bot). Coba lagi beberapa saat lagi.`);
+    const ok = status >= 200 && status < 300;
+    if (/^\s*</.test(text) || !/json/i.test(type)) {
+      throw new HttpError(502, `jkt48.com menolak permintaan dari server ini (HTTP ${status}, perlindungan anti-bot). Coba lagi beberapa saat lagi.`);
     }
     let body: J;
     try {
@@ -87,12 +99,12 @@ async function jktGet(path: string, query: Record<string, string | number | unde
     } catch {
       throw new HttpError(502, "jkt48.com mengirim respons yang tidak valid.");
     }
-    if (!res.ok || body.status === false) {
-      if (res.status === 429) throw new HttpError(429, "jkt48.com sedang membatasi permintaan. Coba lagi sebentar lagi.");
-      if (o.detail && (res.status === 400 || res.status === 404)) throw new HttpError(404, `${o.what} tidak ditemukan di jkt48.com.`);
+    if (!ok || body.status === false) {
+      if (status === 429) throw new HttpError(429, "jkt48.com sedang membatasi permintaan. Coba lagi sebentar lagi.");
+      if (o.detail && (status === 400 || status === 404)) throw new HttpError(404, `${o.what} tidak ditemukan di jkt48.com.`);
       const msg = Array.isArray(body.message) ? body.message.map(String).join("; ") : str(body.message);
-      if (res.status >= 500) throw new HttpError(502, `jkt48.com sedang bermasalah (HTTP ${res.status}).`);
-      throw new HttpError(502, `jkt48.com menolak permintaan (HTTP ${res.status})${msg ? `: ${msg}` : "."}`);
+      if (status >= 500) throw new HttpError(502, `jkt48.com sedang bermasalah (HTTP ${status}).`);
+      throw new HttpError(502, `jkt48.com menolak permintaan (HTTP ${status})${msg ? `: ${msg}` : "."}`);
     }
     if (cache.size >= 500) {
       const oldest = cache.keys().next().value;

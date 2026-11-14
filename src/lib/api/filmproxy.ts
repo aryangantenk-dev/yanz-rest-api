@@ -2,15 +2,26 @@ import { inflateSync } from "node:zlib";
 import { HttpError } from "./types";
 
 /**
- * Penerus permintaan ke situs film yang menolak IP server Vercel.
+ * Penerus permintaan ke situs sumber yang menolak IP server Vercel.
  * Ada dua perantara dengan antarmuka yang sama (GET /fetch?url=..., header x-proxy-key):
  *  - "film"  : VPS ber-IP Indonesia untuk LK21 (scripts/film-proxy/install.sh),
  *              env FILM_PROXY_URL + FILM_PROXY_KEY.
- *  - "sanka" : Supabase Edge Function untuk API Sankanime (supabase/functions/film-proxy),
+ *  - "sanka" : Supabase Edge Function untuk API Sankanime dan jkt48.com (supabase/functions/film-proxy),
  *              env SANKA_PROXY_URL + SANKA_PROXY_KEY.
  */
 export type ProxyVia = "film" | "sanka";
-export type ProxyOpts = { accept?: string; referer?: string; origin?: boolean; xhr?: boolean; timeoutMs?: number; via?: ProxyVia };
+export type ProxyOpts = {
+  accept?: string;
+  referer?: string;
+  origin?: boolean;
+  xhr?: boolean;
+  /** Minta perantara menambahkan header X-Request-Id acak (hanya didukung perantara "sanka"). */
+  requestId?: boolean;
+  timeoutMs?: number;
+  via?: ProxyVia;
+  /** Nama perantara di pesan galat, bila bukan nama bawaannya. */
+  label?: string;
+};
 export type ProxyResult = { status: number; finalUrl: string; type: string; text: string };
 
 const PROXY: Record<ProxyVia, { url: string; key: string; label: string; down: string }> = {
@@ -23,7 +34,8 @@ export function proxyConfigured(via: ProxyVia = "film"): boolean {
 }
 
 export async function viaProxy(url: string, opts: ProxyOpts = {}): Promise<ProxyResult> {
-  const cfg = PROXY[opts.via ?? "film"];
+  const preset = PROXY[opts.via ?? "film"];
+  const cfg = opts.label ? { ...preset, label: opts.label, down: `${opts.label} tidak bisa dihubungi.` } : preset;
   const base = (process.env[cfg.url] || "").trim().replace(/\/+$/, "");
   const key = (process.env[cfg.key] || "").trim();
   if (!base || !key) throw new HttpError(503, `Endpoint ini belum aktif: ${cfg.url} dan ${cfg.key} belum diatur di server.`);
@@ -33,6 +45,7 @@ export async function viaProxy(url: string, opts: ProxyOpts = {}): Promise<Proxy
   if (opts.referer) qs.set("referer", opts.referer);
   if (opts.origin) qs.set("origin", "1");
   if (opts.xhr) qs.set("xhr", "1");
+  if (opts.requestId) qs.set("rid", "1");
 
   let res: Response;
   try {

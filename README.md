@@ -259,4 +259,6 @@ Tanpa kedua env itu endpoint `lk21-*` menjawab 503, dan menjawab 502 selama VPS 
 
 Halaman HTML jkt48.com dijaga tantangan Cloudflare, jadi yang dibaca adalah API JSON publik milik situs itu sendiri (`https://jkt48.com/api/v1/...`, yang juga dipanggil halamannya di browser) dengan header `X-Request-Id` seperti yang dikirim halaman aslinya. Hanya data tanpa login yang diambil; tidak ada yang menyentuh akun, tiket, atau pembayaran. Semua tanggal dan jam memakai WIB.
 
+jkt48.com menolak IP server Vercel walaupun headernya sama, tetapi menerima Supabase Edge Function. Karena itu, bila `SANKA_PROXY_URL` dan `SANKA_PROXY_KEY` sudah diisi (lihat bagian Film), panggilan dititipkan lewat Edge Function `film-proxy` yang sama; daftar izin bawaannya sudah memuat `jkt48.com`. Tanpa kedua env itu jkt48.com dipanggil langsung, yang cocok untuk hosting di VPS sendiri.
+
 Supaya tidak membebani sumber, jawaban disimpan di memori server (daftar member 30 menit, profil 12 jam, jadwal dan berita 5 menit) dan panggilan keluar dibatasi 60 per menit; saat padat endpoint menjawab 429. `birthday` membaca profil tiap member sekali lalu memakai simpanan itu, jadi panggilan pertamanya butuh beberapa detik. Kalau jkt48.com mengubah perlindungannya, endpoint menjawab 502 dengan keterangan "perlindungan anti-bot".

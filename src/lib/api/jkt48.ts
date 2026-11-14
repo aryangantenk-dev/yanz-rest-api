@@ -3,7 +3,7 @@ import type { Endpoint } from "./types";
 import { HttpError } from "./types";
 import { need, opt } from "./helpers";
 import { cleanSlug } from "./scrape";
-import { proxyConfigured, viaProxy } from "./filmproxy";
+import { proxyConfigured, viaProxy } from "./edgeproxy";
 
 /*
  * Sumber: https://jkt48.com (situs resmi, versi 2025+).
@@ -12,7 +12,7 @@ import { proxyConfigured, viaProxy } from "./filmproxy";
  * seperti yang dikirim halamannya (X-Request-Id). Hanya endpoint tanpa login.
  *
  * jkt48.com menolak IP server Vercel walau headernya sama, tetapi menerima Supabase
- * Edge Function. Jadi bila perantara "sanka" (supabase/functions/film-proxy) sudah
+ * Edge Function. Jadi bila perantara itu (supabase/functions/film-proxy) sudah
  * diatur, panggilan dititipkan lewat sana; tanpa itu dipanggil langsung.
  */
 const SITE = "https://jkt48.com";
@@ -67,10 +67,10 @@ async function jktGet(path: string, query: Record<string, string | number | unde
   const job = (async () => {
     const url = `${API}${key}`;
     const accept = "application/json, text/plain, */*";
-    const viaSanka = proxyConfigured("sanka");
+    const viaSanka = proxyConfigured();
     const once = async (): Promise<{ status: number; type: string; text: string }> => {
       if (viaSanka) {
-        return viaProxy(url, { via: "sanka", label: "Server perantara JKT48", accept, referer: `${SITE}/`, requestId: true, timeoutMs: 20000 });
+        return viaProxy(url, { label: "Server perantara JKT48", accept, referer: `${SITE}/`, requestId: true, timeoutMs: 20000 });
       }
       let res: Response;
       try {

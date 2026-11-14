@@ -101,13 +101,6 @@ export const categories: Category[] = [
     seoTitle: "REST API Anime: Scraper Animekuindo, Link Player & Embed",
   },
   {
-    id: "film",
-    name: "Film",
-    tagline: "Sankanime, LK21 & player",
-    description: "Data film dan serial dari Sankanime Movies: pencarian, trending, detail lengkap dengan pemeran, daftar episode, player video siap pasang, link stream dan unduhan. Ditambah scraper LK21 (Layarkaca21) untuk beranda, daftar, genre, detail, dan pemeran.",
-    seoTitle: "REST API Film: Sankanime & LK21, Player Video, Detail & Pemeran",
-  },
-  {
     id: "jkt48",
     name: "JKT48",
     tagline: "Member, jadwal & berita",

@@ -1,6 +1,6 @@
 // film-proxy (Supabase Edge Function)
-// Meneruskan GET /fetch?url=... ke API Sankanime dan API publik jkt48.com, yang menolak IP server Vercel.
-// Antarmukanya sama dengan scripts/film-proxy/install.sh (header x-proxy-key).
+// Meneruskan GET /fetch?url=... ke API publik jkt48.com, yang menolak IP server Vercel.
+// Permintaan wajib membawa header x-proxy-key.
 // Pasang:  supabase functions deploy film-proxy --no-verify-jwt
 //          supabase secrets set FILM_PROXY_KEY=<kunci acak>
 // Lalu di hosting: SANKA_PROXY_URL=https://<ref>.supabase.co/functions/v1/film-proxy

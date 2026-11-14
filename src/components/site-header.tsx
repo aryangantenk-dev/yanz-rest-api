@@ -9,6 +9,7 @@ import { CloseIcon, LogoMark, MenuIcon, MoonIcon, SunIcon, UserIcon } from "./ic
 
 const links = [
   { href: "/docs", label: "Dokumentasi" },
+  { href: "/dashboard", label: "Dashboard" },
   { href: "/#kategori", label: "Kategori" },
   { href: "/#mulai", label: "Cara pakai" },
   { href: "/#contoh", label: "Contoh" },
@@ -70,7 +71,7 @@ export function SiteHeader({ authEnabled = false }: { authEnabled?: boolean }) {
 
         <nav aria-label="Navigasi utama" className="hidden items-center md:flex">
           {links.map((l) => {
-            const active = l.href === "/docs" && pathname.startsWith("/docs");
+            const active = (l.href === "/docs" && pathname.startsWith("/docs")) || l.href === pathname;
             return (
               <Link
                 key={l.href}

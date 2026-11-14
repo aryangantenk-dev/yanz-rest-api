@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "r
 import { refreshAuth, setSession, signOut, useAuth, type AuthUser, type SessionBody } from "./auth-client";
 import { Avatar } from "./avatar";
 import { CopyButton, useOrigin } from "./client-utils";
-import { ArrowIcon, CameraIcon, EyeIcon, EyeOffIcon, LogoutIcon, RefreshIcon, TrashIcon } from "./icons";
+import { ArrowIcon, CameraIcon, ChartIcon, EyeIcon, EyeOffIcon, LogoutIcon, RefreshIcon, TrashIcon } from "./icons";
 import { UsernameField, useUsername } from "./username-field";
 
 const mask = (key: string) => `${key.slice(0, 3)}${"•".repeat(12)}${key.slice(-4)}`;
@@ -398,10 +398,16 @@ export function AccountPanel({ fallback }: { fallback: string }) {
           Lebih suka header? Kirim <code className="font-mono text-fg">x-api-key: yn-…</code> sebagai gantinya.
         </p>
 
-        <Link href="/docs" className="btn btn-primary mt-5 w-full sm:w-auto">
-          Coba di dokumentasi
-          <ArrowIcon />
-        </Link>
+        <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+          <Link href="/docs" className="btn btn-primary">
+            Coba di dokumentasi
+            <ArrowIcon />
+          </Link>
+          <Link href="/dashboard" className="btn btn-secondary">
+            <ChartIcon />
+            Lihat statistik
+          </Link>
+        </div>
         <p className="mt-2 text-sm text-muted">Kolom API key di dokumentasi terisi otomatis selama kamu masuk.</p>
       </section>
 

@@ -309,3 +309,11 @@ export function TrashIcon({ className }: P) {
     </svg>
   );
 }
+
+export function ChartIcon({ className }: P) {
+  return (
+    <svg {...base} width={18} height={18} className={className}>
+      <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
+    </svg>
+  );
+}

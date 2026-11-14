@@ -39,6 +39,7 @@ export function SiteFooter({ total }: { total: number }) {
           <h2 className="text-sm font-semibold">Sumber</h2>
           <ul className="mt-3 text-sm">
             <li><Link href="/docs" className={linkClass}>Dokumentasi lengkap</Link></li>
+            <li><Link href="/dashboard" className={linkClass}>Dashboard</Link></li>
             <li>
               {/* /api adalah route handler yang mengembalikan JSON, bukan halaman, jadi dibuka dengan navigasi biasa. */}
               {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}

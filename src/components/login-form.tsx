@@ -16,8 +16,11 @@ const QUERY_ERRORS: Record<string, string> = {
 };
 
 /** Tujuan setelah masuk: hanya path di situs ini. */
+/** Tanpa tujuan khusus, pengguna yang baru masuk dibawa ke dashboard. */
+const HOME = "/dashboard";
+
 function safeNext(raw: string | null): string {
-  return raw && raw.startsWith("/") && !raw.startsWith("//") && !raw.includes("\\") && raw.length <= 300 ? raw : "/akun";
+  return raw && raw.startsWith("/") && !raw.startsWith("//") && !raw.includes("\\") && raw.length <= 300 ? raw : HOME;
 }
 
 /** Akun tanpa username (wajib) harus mengisinya dulu di /akun; tujuan semula dibawa serta. */
@@ -54,7 +57,7 @@ export function LoginForm({ mode = "login", google, email: emailOn }: { mode?: "
   const register = mode === "register";
   const uname = useUsername();
   const usernameRef = useRef<HTMLInputElement>(null);
-  const nextQuery = next === "/akun" ? "" : `?next=${encodeURIComponent(next)}`;
+  const nextQuery = next === HOME ? "" : `?next=${encodeURIComponent(next)}`;
 
   const [step, setStep] = useState<"email" | "code">("email");
   const [email, setEmail] = useState("");

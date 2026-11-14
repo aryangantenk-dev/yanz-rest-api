@@ -425,3 +425,110 @@ grant execute on function public.auth_set_banned(text, boolean) to service_role;
 grant execute on function public.auth_username_taken(text) to service_role;
 grant execute on function public.auth_set_username(uuid, text) to service_role;
 grant execute on function public.auth_set_photo(uuid, text) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Statistik pemakaian per akun (halaman /dashboard).
+-- Dicatat per akun, bukan per API key, supaya angkanya tetap ada setelah key diganti.
+-- Satu hari dihitung menurut WIB (Asia/Jakarta).
+-- ---------------------------------------------------------------------------
+
+create table if not exists public.api_usage (
+  user_id uuid not null references public.api_users(id) on delete cascade,
+  day date not null,
+  path varchar(120) not null,
+  hits integer not null default 0,
+  errors integer not null default 0,
+  primary key (user_id, day, path)
+);
+
+create index if not exists api_usage_day_idx on public.api_usage (day);
+
+-- Jumlah sepanjang waktu; tetap utuh setelah baris harian yang lama dihapus.
+create table if not exists public.api_usage_totals (
+  user_id uuid primary key references public.api_users(id) on delete cascade,
+  hits bigint not null default 0,
+  errors bigint not null default 0,
+  first_at timestamptz not null default now(),
+  last_at timestamptz not null default now()
+);
+
+alter table public.api_usage enable row level security;
+alter table public.api_usage_totals enable row level security;
+revoke all on table public.api_usage from anon, authenticated;
+revoke all on table public.api_usage_totals from anon, authenticated;
+grant all on table public.api_usage to service_role;
+grant all on table public.api_usage_totals to service_role;
+
+-- Catat satu permintaan milik akun p_id. p_ok = false bila permintaannya berakhir dengan galat.
+create or replace function public.auth_usage_hit(p_id uuid, p_path text, p_ok boolean)
+returns void
+language plpgsql
+set search_path = ''
+as $$
+declare
+  today date := (now() at time zone 'Asia/Jakarta')::date;
+  bad integer := case when p_ok then 0 else 1 end;
+begin
+  insert into public.api_usage (user_id, day, path, hits, errors)
+  values (p_id, today, left(p_path, 120), 1, bad)
+  on conflict (user_id, day, path) do update
+    set hits = public.api_usage.hits + 1, errors = public.api_usage.errors + bad;
+
+  insert into public.api_usage_totals (user_id, hits, errors)
+  values (p_id, 1, bad)
+  on conflict (user_id) do update
+    set hits = public.api_usage_totals.hits + 1, errors = public.api_usage_totals.errors + bad, last_at = now();
+
+  -- Sesekali buang baris harian yang lebih tua dari 90 hari supaya tabel tidak terus membesar.
+  if random() < 0.002 then
+    delete from public.api_usage where day < today - 90;
+  end if;
+exception
+  when foreign_key_violation then
+    null; -- akunnya sudah dihapus
+end;
+$$;
+
+-- Ringkasan untuk dashboard: angka hari ini, 7 dan 30 hari terakhir, total, deret harian
+-- p_days hari terakhir (hari tanpa permintaan ikut muncul dengan angka 0), dan endpoint terbanyak.
+create or replace function public.auth_usage_summary(p_id uuid, p_days integer)
+returns json
+language sql
+stable
+set search_path = ''
+as $$
+  with t as (select (now() at time zone 'Asia/Jakarta')::date as today),
+  u as (select a.day, a.path, a.hits, a.errors from public.api_usage a, t where a.user_id = p_id and a.day > t.today - 30)
+  select json_build_object(
+    'today', (select coalesce(sum(u.hits), 0) from u, t where u.day = t.today),
+    'today_errors', (select coalesce(sum(u.errors), 0) from u, t where u.day = t.today),
+    'week', (select coalesce(sum(u.hits), 0) from u, t where u.day > t.today - 7),
+    'week_errors', (select coalesce(sum(u.errors), 0) from u, t where u.day > t.today - 7),
+    'month', (select coalesce(sum(u.hits), 0) from u),
+    'month_errors', (select coalesce(sum(u.errors), 0) from u),
+    'total', coalesce((select x.hits from public.api_usage_totals x where x.user_id = p_id), 0),
+    'total_errors', coalesce((select x.errors from public.api_usage_totals x where x.user_id = p_id), 0),
+    'first_at', (select x.first_at from public.api_usage_totals x where x.user_id = p_id),
+    'last_at', (select x.last_at from public.api_usage_totals x where x.user_id = p_id),
+    'endpoints', (select count(distinct u.path) from u),
+    'days', (
+      select coalesce(json_agg(json_build_object('day', d.day, 'hits', d.hits, 'errors', d.errors) order by d.day), '[]'::json)
+      from (
+        select g.day::date as day, coalesce(sum(u.hits), 0) as hits, coalesce(sum(u.errors), 0) as errors
+        from t
+        cross join lateral generate_series(t.today - (greatest(1, least(p_days, 30)) - 1), t.today, interval '1 day') as g(day)
+        left join u on u.day = g.day::date
+        group by g.day
+      ) d
+    ),
+    'top', (
+      select coalesce(json_agg(json_build_object('path', p.path, 'hits', p.hits, 'errors', p.errors) order by p.hits desc, p.path), '[]'::json)
+      from (select u.path, sum(u.hits) as hits, sum(u.errors) as errors from u group by u.path order by sum(u.hits) desc, u.path limit 8) p
+    )
+  );
+$$;
+
+revoke all on function public.auth_usage_hit(uuid, text, boolean) from public, anon, authenticated;
+revoke all on function public.auth_usage_summary(uuid, integer) from public, anon, authenticated;
+grant execute on function public.auth_usage_hit(uuid, text, boolean) to service_role;
+grant execute on function public.auth_usage_summary(uuid, integer) to service_role;

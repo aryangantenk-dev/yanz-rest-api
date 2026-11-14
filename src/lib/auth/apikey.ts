@@ -12,7 +12,7 @@ const INVALID_TTL_MS = 30_000;
 const MAX_ENTRIES = 20_000;
 
 export type KeyVerdict = "ok" | "invalid" | "banned" | "error";
-type Entry = { verdict: Exclude<KeyVerdict, "error">; exp: number };
+type Entry = { verdict: Exclude<KeyVerdict, "error">; id: string | null; exp: number };
 
 const g = globalThis as typeof globalThis & { __yanzKeys?: Map<string, Entry> };
 const cache = (g.__yanzKeys ??= new Map());
@@ -33,9 +33,11 @@ export async function verifyKey(key: string): Promise<KeyVerdict> {
   const hit = cache.get(key);
   if (hit && hit.exp > now) return hit.verdict;
   let verdict: Entry["verdict"];
+  let id: string | null = null;
   try {
     const owner = await keyOwner(key);
     verdict = !owner ? "invalid" : owner.banned ? "banned" : "ok";
+    id = owner?.id ?? null;
   } catch {
     // Database tidak bisa dihubungi: pakai jawaban terakhir bila ada, selain itu tolak dulu.
     return hit ? hit.verdict : "error";
@@ -44,8 +46,14 @@ export async function verifyKey(key: string): Promise<KeyVerdict> {
     for (const [k, v] of cache) if (v.exp <= now) cache.delete(k);
     if (cache.size >= MAX_ENTRIES) cache.clear();
   }
-  cache.set(key, { verdict, exp: now + (verdict === "ok" ? VALID_TTL_MS : INVALID_TTL_MS) });
+  cache.set(key, { verdict, id, exp: now + (verdict === "ok" ? VALID_TTL_MS : INVALID_TTL_MS) });
   return verdict;
+}
+
+/** Id akun pemilik sebuah key yang baru saja lolos `verifyKey` (dibaca dari cache), untuk statistik pemakaian. */
+export function keyOwnerId(key: string): string | null {
+  const hit = cache.get(key);
+  return hit && hit.verdict === "ok" ? hit.id : null;
 }
 
 /** Lupakan sebuah key di instance ini (dipanggil saat key diganti). */

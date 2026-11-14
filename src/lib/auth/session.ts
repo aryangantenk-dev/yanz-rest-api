@@ -76,7 +76,7 @@ export function sessionUserId(req: Request): string | null {
 }
 
 /** Tujuan setelah masuk: hanya path di situs ini (bukan //host atau /\host). */
-export function safeNext(raw: string | null | undefined, fallback = "/akun"): string {
+export function safeNext(raw: string | null | undefined, fallback = "/dashboard"): string {
   if (!raw || raw.length > 300 || !raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\") || /[\u0000-\u001f]/.test(raw)) return fallback;
   return raw;
 }

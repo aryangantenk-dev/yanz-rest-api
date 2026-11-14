@@ -6,7 +6,8 @@ import { hit } from "@/lib/auth/limit";
 import { sendOtpEmail } from "@/lib/auth/mail";
 import { clearSessionCookie, isSecure, otpHash, sessionCookie, sessionUserId } from "@/lib/auth/session";
 import { login, normalizeEmail, otpCancel, otpCheck, otpIssue, rotateKey, sessionBody, setPhoto, setUsername, userById, usernameTaken, type User } from "@/lib/auth/users";
-import { clientIp } from "@/lib/guard";
+import { usageSummary } from "@/lib/auth/usage";
+import { RATE_LIMIT, clientIp } from "@/lib/guard";
 import { AVATAR_DIR, MAX_AVATAR_BYTES, hasImageStore, removeImages, saveImage, sniffImage } from "@/lib/images";
 import { USERNAME_TAKEN, cleanUsername, usernameProblem } from "@/lib/username";
 import { SITE_CREATOR, getOrigin } from "@/lib/site";
@@ -17,6 +18,7 @@ export const runtime = "nodejs";
 /**
  * Rute login untuk halaman /login dan /akun (bukan bagian dari API publik).
  *   GET  /api/auth/me          sesi saat ini beserta API key pemiliknya
+ *   GET  /api/auth/usage       statistik pemakaian akun yang sedang masuk
  *   POST /api/auth/otp         { email, username? }        kirim kode 6 digit ke email
  *   POST /api/auth/verify      { email, code, username? }  tukar kode dengan sesi
  *   POST /api/auth/check       { username }     apakah username masih tersedia
@@ -34,7 +36,7 @@ function json(status: number, body: Record<string, unknown>, setCookie?: string)
   return res;
 }
 
-const fail = (status: number, error: string, extra: Record<string, unknown> = {}) => json(status, { code: status, error, ...extra });
+const fail = (status: number, error: string, extra: Record<string, unknown> = {}, setCookie?: string) => json(status, { code: status, error, ...extra }, setCookie);
 
 /** Permintaan yang mengubah sesuatu harus datang dari halaman situs ini sendiri. */
 function sameSite(req: Request): boolean {
@@ -62,6 +64,7 @@ const STORE_DOWN = "Server akun sedang tidak dapat dihubungi. Coba lagi sebentar
 
 export async function GET(req: Request, ctx: { params: Promise<{ action: string }> }) {
   const { action } = await ctx.params;
+  if (action === "usage") return usage(req);
   if (action !== "me") return fail(404, "Aksi tidak dikenal.");
   const base = { methods: { google: HAS_GOOGLE, email: HAS_EMAIL }, keyRequired: KEY_REQUIRED };
   const id = AUTH_ENABLED ? sessionUserId(req) : null;
@@ -73,6 +76,20 @@ export async function GET(req: Request, ctx: { params: Promise<{ action: string 
   } catch (e) {
     console.error("[auth/me]", e);
     return fail(503, STORE_DOWN, base);
+  }
+}
+
+/** Statistik pemakaian milik akun yang sedang masuk (halaman /dashboard). */
+async function usage(req: Request) {
+  const id = AUTH_ENABLED ? sessionUserId(req) : null;
+  if (!id) return fail(401, "Kamu belum login. Login dahulu untuk mengecek statistik API key kamu.");
+  try {
+    const user = await userById(id);
+    if (!user || user.banned) return fail(401, "Sesi berakhir. Masuk lagi untuk melihat statistik.", {}, clearSessionCookie(isSecure(req)));
+    return json(200, { usage: await usageSummary(id), limit: RATE_LIMIT });
+  } catch (e) {
+    console.error("[auth/usage]", e);
+    return fail(503, STORE_DOWN);
   }
 }
 

@@ -2,43 +2,37 @@ FROM python:3.11-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PLAYWRIGHT_BROWSERS_PATH=/opt/browsers \
+    CHROMIUM_PATH=/usr/bin/chromium \
     REMBG_HOME=/models/rembg \
     U2NET_HOME=/models/rembg \
     HF_HOME=/models/hf \
     TTS_DIR=/models/tts \
     DATA_DIR=/data
 
-# ffmpeg untuk semua konversi media; libatomic1 dibutuhkan driver Node milik Playwright;
-# libgomp1, libgl1, dan libglib2.0-0 dibutuhkan ONNX/Whisper/OpenCV;
-# font Noto supaya tangkapan layar menampilkan huruf non-Latin dan emoji.
+# Pakai paket chromium bawaan Debian (jauh lebih hemat ruang disk daripada bundel 3 browser Playwright).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ffmpeg curl bzip2 ca-certificates tini \
+      chromium ffmpeg curl bzip2 ca-certificates tini \
       libatomic1 libgomp1 libstdc++6 libgl1 libglib2.0-0 \
-      fonts-liberation fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji \
-    && rm -rf /var/lib/apt/lists/*
+      fonts-liberation fonts-noto-core fonts-noto-color-emoji \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && useradd -m -u 10001 app && mkdir -p /data /models && chown -R app:app /data /models
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install -r requirements.txt \
+RUN pip install --no-cache-dir -r requirements.txt \
     && (pip uninstall -y opencv-python || true) \
-    && pip install --force-reinstall --no-deps opencv-python-headless \
-    && playwright install --with-deps chromium \
-    && rm -rf /var/lib/apt/lists/*
+    && pip install --no-cache-dir --force-reinstall --no-deps opencv-python-headless
 
-# Model diunduh saat build supaya permintaan pertama tidak menunggu unduhan.
-ARG WHISPER_MODEL=small
+# Unduh model langsung sebagai pengguna `app` agar tidak menggandakan layer saat chown.
+ARG WHISPER_MODEL=base
 ENV WHISPER_MODEL=${WHISPER_MODEL}
+USER app
 RUN mkdir -p /models/rembg /models/tts /models/hf \
     && python -c "from rembg import new_session; new_session('u2net')" \
     && curl -fL --retry 3 --retry-delay 2 -sS https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-id_ID-news_tts-medium.tar.bz2 | tar xj -C /models/tts \
     && python -c "import os; from faster_whisper import WhisperModel; WhisperModel(os.environ['WHISPER_MODEL'], device='cpu', compute_type='int8')"
 
-COPY server.py selftest.py ./
-RUN useradd -m -u 10001 app && mkdir -p /data \
-    && chmod -R a+rX /opt/browsers /models \
-    && chown -R app:app /data /models
-USER app
+COPY --chown=app:app server.py selftest.py ./
 
 EXPOSE 8080
 ENTRYPOINT ["tini", "--"]

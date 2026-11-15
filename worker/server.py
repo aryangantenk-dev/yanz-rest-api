@@ -386,13 +386,16 @@ async def browser():
         if _playwright is None:
             _playwright = await async_playwright().start()
         opts = {"args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--hide-scrollbars", "--mute-audio"]}
+        sys_bin = CHROMIUM or shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
+        has_bundled = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")).is_dir() and any(Path(os.environ["PLAYWRIGHT_BROWSERS_PATH"]).glob("chromium*"))
         if CHROMIUM:
             opts["executable_path"] = CHROMIUM
+        elif sys_bin and not has_bundled:
+            opts["executable_path"] = sys_bin
         try:
             _browser = await _playwright.chromium.launch(**opts)
         except Exception:
-            sys_bin = shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
-            if CHROMIUM or not sys_bin:
+            if "executable_path" in opts or not sys_bin:
                 raise
             opts["executable_path"] = sys_bin
             _browser = await _playwright.chromium.launch(**opts)

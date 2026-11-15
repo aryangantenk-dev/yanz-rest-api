@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Pasang atau perbarui yanz-worker di mesin ini (otomatis jalan tanpa Docker di Instabox/kontainer,
-# atau memakai Docker di VPS biasa bila tersedia).
+# Pasang atau perbarui yanz-worker di mesin ini.
+# Secara bawaan dipasang LANGSUNG tanpa Docker (hemat ruang disk < 1 GB, memanfaatkan Chromium
+# sistem yang sudah ada di Instabox, dan mendaftarkan layanan systemd / pengawas latar belakang).
+# Gunakan `--docker` hanya bila ingin membangun kontainer Docker terpisah di VPS berkapasitas besar.
 #
 # Cara pakai satu baris di terminal Instabox:
 #   curl -fsSL https://raw.githubusercontent.com/aryangantenk-dev/yanz-rest-api/main/worker/install.sh | bash
 #
 # Atau dari folder worker/:
-#   bash install.sh                  pasang / perbarui (kunci lama tetap dipertahankan)
-#   bash install.sh --langsung       paksa pasang langsung tanpa Docker
+#   bash install.sh                  pasang / perbarui langsung tanpa Docker (bawaan)
 #   bash install.sh --docker         paksa pakai Docker Compose
 #   bash install.sh --ganti-kunci    buat WORKER_KEY baru (lalu perbarui di Vercel)
 #   bash install.sh status|logs|restart|stop|start|test
@@ -23,16 +24,51 @@ as_root() {
   fi
 }
 
+free_disk_mb() {
+  local p="${1:-$HOME}"
+  [ -e "$p" ] || p="/"
+  df -Pm "$p" 2>/dev/null | awk 'NR==2 {print $4}'
+}
+
+reclaim_docker_space_if_low() {
+  local avail
+  avail="$(free_disk_mb "/")"
+  if [[ "${avail:-99999}" =~ ^[0-9]+$ ]] && [ "$avail" -lt 10000 ] && command -v docker >/dev/null 2>&1; then
+    echo "Ruang disk tersisa ${avail} MB — membersihkan sisa cache Docker yang gagal sebelumnya..."
+    as_root docker rm -f yanz-worker >/dev/null 2>&1 || true
+    as_root docker system prune -af >/dev/null 2>&1 || true
+    as_root docker builder prune -af >/dev/null 2>&1 || true
+    rm -rf "${HOME:-/root}/.cache/pip" 2>/dev/null || true
+    echo "Ruang disk sekarang: $(free_disk_mb "/") MB kosong."
+  fi
+}
+
 # Bila dijalankan langsung lewat `curl ... | bash` (bukan dari berkas di folder worker/),
-# unduh kode terbaru ke ~/yanz-rest-api lalu jalankan dari sana.
+# gunakan checkout yang sudah ada (mis. ~/yanz) atau unduh ke ~/yanz.
 SELF_DIR=""
 if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
   SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
 if [ -z "$SELF_DIR" ] || [ ! -f "$SELF_DIR/server.py" ] || [ ! -f "$SELF_DIR/ctl.sh" ]; then
+  reclaim_docker_space_if_low
   REPO_URL="${YANZ_REPO:-https://github.com/aryangantenk-dev/yanz-rest-api.git}"
   REPO_BRANCH="${YANZ_BRANCH:-main}"
-  TARGET_DIR="${YANZ_DIR:-$HOME/yanz-rest-api}"
+  if [ -n "${YANZ_DIR:-}" ]; then
+    TARGET_DIR="$YANZ_DIR"
+  elif git rev-parse --show-toplevel >/dev/null 2>&1 && [ -d "$(git rev-parse --show-toplevel)/worker" ]; then
+    TARGET_DIR="$(git rev-parse --show-toplevel)"
+  elif [ -d "$HOME/yanz/.git" ]; then
+    TARGET_DIR="$HOME/yanz"
+    # Hapus duplikat folder lama bila ada agar hemat disk.
+    if [ -d "$HOME/yanz-rest-api" ] && [ "$TARGET_DIR" != "$HOME/yanz-rest-api" ]; then
+      rm -rf "$HOME/yanz-rest-api" 2>/dev/null || true
+    fi
+  elif [ -d "$HOME/yanz-rest-api/.git" ]; then
+    TARGET_DIR="$HOME/yanz-rest-api"
+  else
+    TARGET_DIR="$HOME/yanz"
+  fi
+
   if ! command -v git >/dev/null 2>&1; then
     echo "Memasang git..."
     as_root apt-get update -qq
@@ -48,7 +84,8 @@ if [ -z "$SELF_DIR" ] || [ ! -f "$SELF_DIR/server.py" ] || [ ! -f "$SELF_DIR/ctl
     git clone --depth 1 -b "$REPO_BRANCH" "$REPO_URL" "$TARGET_DIR"
   fi
   if [ -z "${YANZ_BRANCH:-}" ] && git -C "$TARGET_DIR" fetch --depth 1 origin arena/f8aec1ff-yanz-rest-api >/dev/null 2>&1; then
-    if [ ! -f "$TARGET_DIR/worker/ctl.sh" ] || ! grep -q "libatomic1" "$TARGET_DIR/worker/Dockerfile" 2>/dev/null; then
+    # Selama PR branch ini belum di-merge ke main, ambil versi terbaru dari branch ini.
+    if ! git -C "$TARGET_DIR" merge-base --is-ancestor FETCH_HEAD HEAD 2>/dev/null; then
       git -C "$TARGET_DIR" checkout -f FETCH_HEAD
     fi
   fi
@@ -81,12 +118,6 @@ for arg in "$@"; do
   esac
 done
 
-in_container() {
-  [ -f /.dockerenv ] || [ -f /run/.containerenv ] \
-    || grep -qaE 'docker|lxc|containerd|kubepods|sandbox' /proc/1/cgroup 2>/dev/null \
-    || [ ! -d /run/systemd/system ]
-}
-
 detect_compose() {
   COMPOSE=()
   command -v docker >/dev/null 2>&1 || return 1
@@ -107,22 +138,20 @@ detect_compose() {
   return 1
 }
 
+# Bawaan: pasang langsung tanpa Docker (jauh lebih cepat & hemat ruang disk di Instabox/VPS kecil).
 COMPOSE=()
 if [ "$FORCE_MODE" = "docker" ]; then
   if ! detect_compose; then
     echo "Mode --docker diminta, tetapi layanan Docker tidak aktif di mesin ini." >&2
-    echo "Jalankan tanpa --docker agar dipasang langsung (cocok untuk Instabox)." >&2
     exit 1
   fi
   RUN_MODE="docker"
-elif [ "$FORCE_MODE" = "native" ]; then
-  RUN_MODE="native"
-elif in_container; then
-  RUN_MODE="native"
-elif detect_compose; then
-  RUN_MODE="docker"
 else
   RUN_MODE="native"
+fi
+
+if [ "$RUN_MODE" = "native" ]; then
+  reclaim_docker_space_if_low
 fi
 
 avail_ram_mb() {
@@ -166,6 +195,8 @@ get_env_kv() {
 }
 
 RAM_MB="$(avail_ram_mb)"
+DISK_MB="$(free_disk_mb "$DIR")"
+DISK_MB="${DISK_MB:-8000}"
 FRESH_ENV=0
 if [ ! -f .env ]; then
   cp .env.example .env
@@ -186,14 +217,16 @@ elif ! grep -Eq '^WORKER_KEY=.{24,}' .env; then
   echo "WORKER_KEY di worker/.env kosong, diisi kunci baru."
 fi
 
-# Sesuaikan ukuran model Whisper & jumlah pekerjaan serentak dengan kapasitas RAM mesin.
+# Pilih Whisper `base` (~145 MB) bila RAM < 5 GB atau sisa disk < 10 GB supaya tidak kehabisan ruang.
 CUR_WHISPER="$(get_env_kv WHISPER_MODEL)"
 if [ -z "$CUR_WHISPER" ]; then
-  if [ "$RAM_MB" -lt 5000 ]; then
+  if [ "$RAM_MB" -lt 5000 ] || [ "$DISK_MB" -lt 10000 ]; then
     set_env_kv WHISPER_MODEL "base"
   else
     set_env_kv WHISPER_MODEL "small"
   fi
+elif [ "$CUR_WHISPER" = "small" ] && [ "$DISK_MB" -lt 8000 ] && [ ! -d "$DIR/.models/hf" ]; then
+  set_env_kv WHISPER_MODEL "base"
 fi
 if [ "$FRESH_ENV" = 1 ] && [ "$RAM_MB" -lt 3200 ]; then
   set_env_kv MAX_JOBS "1"
@@ -203,47 +236,50 @@ PORT="$(get_env_kv PORT)"
 PORT="${PORT:-8080}"
 
 install_native() {
-  echo "Mode pasang: langsung tanpa Docker (RAM terdeteksi ~${RAM_MB} MB, Whisper: ${WHISPER_CHOICE})"
+  echo "Mode pasang: langsung tanpa Docker (RAM ~${RAM_MB} MB, disk kosong ~${DISK_MB} MB, Whisper: ${WHISPER_CHOICE})"
 
   if command -v apt-get >/dev/null 2>&1; then
-    echo "[1/5] Memasang paket sistem (ffmpeg, Python venv, font)..."
+    echo "[1/5] Memasang paket sistem (ffmpeg, Python venv, pustaka pendukung)..."
     as_root apt-get update -qq
     as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates curl bzip2 ffmpeg python3 python3-venv python3-pip \
       libatomic1 libgomp1 libstdc++6 libgl1 libglib2.0-0 \
       fonts-liberation fonts-noto-core fonts-noto-color-emoji
+    as_root apt-get clean
   elif ! command -v ffmpeg >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
     echo "ffmpeg dan python3 wajib terpasang di sistem ini." >&2
     exit 1
   fi
 
-  echo "[2/5] Menyiapkan lingkungan Python (.venv) & pustaka..."
+  echo "[2/5] Menyiapkan lingkungan Python (.venv) tanpa cache duplikat..."
   if [ ! -x "$DIR/.venv/bin/python" ]; then
     python3 -m venv "$DIR/.venv"
   fi
-  "$DIR/.venv/bin/pip" install -q --upgrade pip
-  "$DIR/.venv/bin/pip" install -q -r "$DIR/requirements.txt"
+  "$DIR/.venv/bin/pip" install -q --no-cache-dir --upgrade pip
+  "$DIR/.venv/bin/pip" install -q --no-cache-dir -r "$DIR/requirements.txt"
   "$DIR/.venv/bin/pip" uninstall -y -q opencv-python >/dev/null 2>&1 || true
-  "$DIR/.venv/bin/pip" install -q --force-reinstall --no-deps opencv-python-headless
+  "$DIR/.venv/bin/pip" install -q --no-cache-dir --force-reinstall --no-deps opencv-python-headless
 
-  echo "[3/5] Memasang browser Chromium untuk tangkapan layar & PDF..."
-  mkdir -p "$DIR/.browsers"
-  if [ "$(id -u)" = "0" ]; then
-    PLAYWRIGHT_BROWSERS_PATH="$DIR/.browsers" "$DIR/.venv/bin/playwright" install --with-deps chromium || {
-      apt-get install -y --no-install-recommends chromium || apt-get install -y --no-install-recommends chromium-browser || true
-      PLAYWRIGHT_BROWSERS_PATH="$DIR/.browsers" "$DIR/.venv/bin/playwright" install chromium || true
-    }
-  else
-    if command -v sudo >/dev/null 2>&1; then
-      sudo env PLAYWRIGHT_BROWSERS_PATH="$DIR/.browsers" "$DIR/.venv/bin/playwright" install --with-deps chromium || {
-        sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends chromium \
-          || sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends chromium-browser || true
-        PLAYWRIGHT_BROWSERS_PATH="$DIR/.browsers" "$DIR/.venv/bin/playwright" install chromium || true
-      }
-      sudo chown -R "$(id -u):$(id -g)" "$DIR/.browsers" || true
+  echo "[3/5] Menyiapkan browser Chromium..."
+  SYS_CHROME="$(command -v chromium || command -v chromium-browser || command -v google-chrome || true)"
+  if [ -n "$SYS_CHROME" ]; then
+    echo "      Memakai Chromium sistem yang sudah terpasang ($SYS_CHROME) — hemat ~600 MB disk."
+    set_env_kv CHROMIUM_PATH "$SYS_CHROME"
+  elif command -v apt-get >/dev/null 2>&1; then
+    as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends chromium \
+      || as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends chromium-browser \
+      || true
+    as_root apt-get clean
+    SYS_CHROME="$(command -v chromium || command -v chromium-browser || true)"
+    if [ -n "$SYS_CHROME" ]; then
+      set_env_kv CHROMIUM_PATH "$SYS_CHROME"
     else
-      PLAYWRIGHT_BROWSERS_PATH="$DIR/.browsers" "$DIR/.venv/bin/playwright" install chromium
+      mkdir -p "$DIR/.browsers"
+      PLAYWRIGHT_BROWSERS_PATH="$DIR/.browsers" "$DIR/.venv/bin/playwright" install --with-deps chromium
     fi
+  else
+    mkdir -p "$DIR/.browsers"
+    PLAYWRIGHT_BROWSERS_PATH="$DIR/.browsers" "$DIR/.venv/bin/playwright" install chromium
   fi
 
   echo "[4/5] Mengunduh model AI (hapus latar, suara Bahasa Indonesia, Whisper ${WHISPER_CHOICE})..."
@@ -290,7 +326,6 @@ UNIT
     bash "$DIR/ctl.sh" status >/dev/null
   else
     bash "$DIR/ctl.sh" restart
-    # Di kontainer tanpa systemd (mis. Instabox), pastikan worker menyala lagi saat terminal dibuka setelah mesin dijeda.
     if [ -n "${HOME:-}" ] && [ -d "${HOME:-}" ]; then
       RC="$HOME/.bashrc"
       touch "$RC"
@@ -305,7 +340,7 @@ UNIT
 }
 
 install_docker() {
-  echo "Mode pasang: Docker Compose (membangun image, pertama kali 10 sampai 20 menit)..."
+  echo "Mode pasang: Docker Compose (membangun image)..."
   "${COMPOSE[@]}" up -d --build
 
   echo "Menunggu worker siap..."
@@ -330,7 +365,6 @@ else
   install_native
 fi
 
-# Coba tebak alamat publik Instabox bila ID mesin terlihat dari variabel lingkungan.
 PUBLIC_HINT="https://${PORT}-<id-mesin>.instabox.tech"
 for cand in "${INSTABOX_URL:-}" "${INSTABOX_HOST:-}" "${SANDBOX_HOST:-}"; do
   if [ -n "$cand" ]; then
@@ -349,12 +383,12 @@ cat <<MSG
 yanz-worker sudah berjalan di port ${PORT}!
 
 Langkah berikutnya:
-  1. Buka port ${PORT} sebagai URL publik (Public) di dashboard Instabox.
-     Alamatnya berbentuk: ${PUBLIC_HINT}
+  1. Buka tab "Ports" di bagian atas kanan Instabox, lalu publikasikan
+     port ${PORT} (Public) dan salin alamat HTTPS-nya.
      (Cek di browser: <URL>/health harus menampilkan {"ok": true, ...})
 
-  2. Pasang dua nilai ini ke Vercel (atau kirim keduanya ke chat Arena
-     supaya langsung dipasang dan di-deploy ulang otomatis):
+  2. Kirim alamat URL publik tadi beserta WORKER_KEY di bawah ini ke
+     chat Arena supaya langsung dipasang ke Vercel dan di-deploy ulang:
 
        WORKER_URL = ${PUBLIC_HINT}
        WORKER_KEY = ${key}

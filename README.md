@@ -66,7 +66,7 @@ Jawaban bila API key bermasalah:
 
 Hasil pemeriksaan API key disimpan sementara di memori server (60 detik), jadi key yang diganti atau akun yang dinonaktifkan bisa masih diterima paling lama satu menit.
 
-Yang **tidak** butuh API key: `/api` (indeks), `/api/stats`, `/api/health`, tautan pendek `/s/<kode>`, dan gambar unggahan `/i/<nama>`.
+Yang **tidak** butuh API key: `/api` (indeks), `/api/stats`, `/api/status`, `/api/health`, tautan pendek `/s/<kode>`, dan gambar unggahan `/i/<nama>`.
 
 Untuk owner (butuh `ADMIN_KEY`):
 
@@ -81,7 +81,7 @@ Untuk owner (butuh `ADMIN_KEY`):
 Sebuah akun bisa dijadikan admin (kolom `api_users.is_admin`). Akun admin:
 
 - tidak terkena kuota harian, dan batas per menitnya dihitung per akun (600 per menit, atau `RATE_LIMIT_PER_MIN` kalau nilainya lebih besar); header jawabannya `x-plan: admin`,
-- bisa membuka halaman `/admin` setelah login: daftar akun (cari, atur paket, nonaktifkan dan aktifkan lagi), pesanan paket, blokir IP, dan status pembayaran,
+- bisa membuka halaman `/admin` setelah login: daftar akun (cari, atur paket, nonaktifkan dan aktifkan lagi), pesanan paket, blokir IP, blokir API, dan status pembayaran,
 - tidak bisa dinonaktifkan lewat `userban` sebelum status adminnya dicabut.
 
 Status admin hanya bisa diberi atau dicabut dengan `ADMIN_KEY`, tidak dari halaman `/admin`:
@@ -140,6 +140,24 @@ Mengelola blokir (hanya owner, butuh `ADMIN_KEY`):
 | `/api/admin/ban?ip=1.2.3.4&reason=…&key=…` | Blokir IP secara manual. |
 
 Kunci juga bisa dikirim lewat header `x-admin-key`. Cara lain: hapus baris IP tersebut dari tabel `banned_ips` di Supabase.
+
+### Blokir API
+
+Admin bisa menonaktifkan satu endpoint, atau satu kategori penuh, tanpa deploy ulang; misalnya saat sumber datanya sedang rusak. Caranya lewat tab **Blokir API** di halaman `/admin`, atau:
+
+| Endpoint | Fungsi |
+| --- | --- |
+| `/api/admin/apiblocks?key=…` | Daftar endpoint yang sedang dinonaktifkan. |
+| `/api/admin/apiblock?path=film/lk21&reason=…&key=…` | Nonaktifkan satu endpoint. `path=film/*` (atau `path=film`) menonaktifkan semua endpoint kategori itu. `reason` opsional dan tampil ke pengguna. |
+| `/api/admin/apiunblock?path=film/lk21&key=…` | Aktifkan lagi. |
+
+Selama diblokir:
+
+- permintaan ke endpoint itu dijawab `503` dengan `blocked: true`, alasan dari admin, dan header `x-endpoint-blocked: 1`; ini berlaku untuk semua pemanggil, termasuk akun admin,
+- permintaan itu tidak mengurangi kuota harian dan tidak masuk statistik pemakaian, tetapi tetap terkena batas per menit,
+- endpoint itu ditandai **Nonaktif** di halaman dokumentasi, `blocked: true` di `GET /api`, dan terdaftar di `GET /api/status` (terbuka tanpa API key).
+
+Daftarnya disimpan di tabel `blocked_endpoints` dan dibaca ulang paling lama setiap 30 detik, jadi perubahan berlaku di semua server dalam waktu itu. Bila database tidak bisa dihubungi, daftar terakhir yang berhasil dibaca tetap dipakai.
 
 ## Game untuk bot WhatsApp (Baileys)
 

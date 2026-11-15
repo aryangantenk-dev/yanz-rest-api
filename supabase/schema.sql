@@ -907,3 +907,22 @@ $$;
 
 revoke all on function public.auth_set_admin(text, boolean) from public, anon, authenticated;
 grant execute on function public.auth_set_admin(text, boolean) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Blokir API
+-- Endpoint yang dinonaktifkan admin. `path` berisi "kategori/slug" (mis. film/lk21), atau
+-- "kategori/*" untuk satu kategori penuh. Permintaan ke endpoint itu dijawab 503.
+-- Kelola lewat halaman /admin, atau /api/admin/apiblocks, apiblock, apiunblock.
+-- Mengaktifkan lagi secara manual: hapus barisnya di sini.
+-- ---------------------------------------------------------------------------
+create table if not exists public.blocked_endpoints (
+  path varchar(120) primary key,
+  reason text not null default '',
+  created_at timestamptz not null default now()
+);
+
+alter table public.blocked_endpoints enable row level security;
+
+-- Hanya server (service role) yang membaca dan mengubah tabel ini.
+revoke all on table public.blocked_endpoints from anon, authenticated;
+grant select, insert, update, delete on table public.blocked_endpoints to service_role;

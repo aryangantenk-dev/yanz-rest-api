@@ -1,6 +1,6 @@
 import { desc, eq, sql } from "drizzle-orm";
 import { getDb, hasDatabase } from "./index";
-import { apiStats, bannedIps, shortLinks } from "./schema";
+import { apiStats, bannedIps, blockedEndpoints, shortLinks } from "./schema";
 
 /**
  * Penyimpanan untuk statistik pemakaian dan pemendek URL. Dua backend didukung:
@@ -28,9 +28,15 @@ export interface Store {
   listBans(): Promise<Ban[]>;
   banIp(ip: string, reason: string): Promise<void>;
   unbanIp(ip: string): Promise<void>;
+  /** Daftar endpoint yang dinonaktifkan admin. */
+  listBlocks(): Promise<ApiBlock[]>;
+  blockPath(path: string, reason: string): Promise<void>;
+  unblockPath(path: string): Promise<void>;
 }
 
 export type Ban = { ip: string; reason: string; created_at: string | null };
+/** `path` berisi "kategori/slug", atau "kategori/*" untuk satu kategori penuh. */
+export type ApiBlock = { path: string; reason: string; created_at: string | null };
 
 /* ---------- Supabase (PostgREST) ---------- */
 
@@ -95,6 +101,13 @@ function supabaseStore(): Store {
     async unbanIp(ip) {
       await table("DELETE", `banned_ips?ip=eq.${encodeURIComponent(ip)}`, undefined, "return=minimal");
     },
+    listBlocks: async () => (await table<ApiBlock[] | null>("GET", "blocked_endpoints?select=path,reason,created_at&order=created_at.desc&limit=1000")) ?? [],
+    async blockPath(path, reason) {
+      await table("POST", "blocked_endpoints?on_conflict=path", { path, reason: reason.slice(0, 300), created_at: new Date().toISOString() }, "resolution=merge-duplicates,return=minimal");
+    },
+    async unblockPath(path) {
+      await table("DELETE", `blocked_endpoints?path=eq.${encodeURIComponent(path)}`, undefined, "return=minimal");
+    },
     async ping() {
       await rpc("api_stats_summary");
     },
@@ -132,6 +145,19 @@ function postgresStore(): Store {
     },
     async unbanIp(ip) {
       await (await db()).delete(bannedIps).where(eq(bannedIps.ip, ip));
+    },
+    async listBlocks() {
+      const rows = await (await db()).select().from(blockedEndpoints).orderBy(desc(blockedEndpoints.createdAt)).limit(1000);
+      return rows.map((r) => ({ path: r.path, reason: r.reason, created_at: r.createdAt?.toISOString() ?? null }));
+    },
+    async blockPath(path, reason) {
+      await (await db())
+        .insert(blockedEndpoints)
+        .values({ path, reason: reason.slice(0, 300) })
+        .onConflictDoUpdate({ target: blockedEndpoints.path, set: { reason: reason.slice(0, 300), createdAt: new Date() } });
+    },
+    async unblockPath(path) {
+      await (await db()).delete(blockedEndpoints).where(eq(blockedEndpoints.path, path));
     },
     async ping() {
       await (await db()).execute(sql`select 1`);

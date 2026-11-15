@@ -26,9 +26,14 @@ type OrderRow = { id: string; email: string; username: string; plan: string; mon
 type Orders = { paid: number; paid_amount: number; orders: OrderRow[] };
 type Ban = { ip: string; reason: string; created_at: string | null };
 type Bans = { total: number; bans: Ban[] };
+/** Endpoint untuk pilihan blokir API: `id` berisi "kategori/slug". */
+type EndpointOption = { id: string; title: string; category: string };
+type CategoryOption = { id: string; name: string };
+type ApiBlockRow = { path: string; reason: string; created_at: string | null; scope?: "endpoint" | "category"; title?: string; exists?: boolean };
+type ApiBlocks = { total: number; blocks: ApiBlockRow[] };
 type Payment = { plan_days: number; api_key_set: boolean; webhook_secret_set: boolean; fee_bearer: string; gateway_reachable: boolean; webhook_url: string };
 type Notice = { tone: "ok" | "danger"; text: string };
-type Tab = "akun" | "pesanan" | "blokir" | "pembayaran";
+type Tab = "akun" | "pesanan" | "blokir" | "api" | "pembayaran";
 
 const OFFLINE = "Tidak dapat terhubung ke server. Periksa koneksimu, lalu coba lagi.";
 const STATUS_LABEL: Record<string, string> = { pending: "Menunggu pembayaran", paid: "Lunas", expired: "Kedaluwarsa", canceled: "Dibatalkan", failed: "Gagal dibuat" };
@@ -36,6 +41,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "akun", label: "Akun" },
   { id: "pesanan", label: "Pesanan" },
   { id: "blokir", label: "Blokir IP" },
+  { id: "api", label: "Blokir API" },
   { id: "pembayaran", label: "Pembayaran" },
 ];
 
@@ -95,20 +101,37 @@ function Frame({ children }: { children: React.ReactNode }) {
     <div>
       <header className="mb-8">
         <h1 className="font-mono text-[2rem] font-bold leading-tight tracking-tight sm:text-[2.5rem]">Admin</h1>
-        <p className="mt-3 max-w-[60ch] text-lg text-muted">Akun pengguna, pesanan paket, blokir IP, dan status pembayaran.</p>
+        <p className="mt-3 max-w-[60ch] text-lg text-muted">Akun pengguna, pesanan paket, blokir IP, blokir API, dan status pembayaran.</p>
       </header>
       {children}
     </div>
   );
 }
 
-export function AdminPanel({ authEnabled, plans, planDays }: { authEnabled: boolean; plans: PlanOption[]; planDays: number }) {
+export function AdminPanel({
+  authEnabled,
+  plans,
+  planDays,
+  endpoints = [],
+  categories = [],
+}: {
+  authEnabled: boolean;
+  plans: PlanOption[];
+  planDays: number;
+  /** Semua endpoint dan kategorinya, untuk pilihan di tab Blokir API. */
+  endpoints?: EndpointOption[];
+  categories?: CategoryOption[];
+}) {
   const auth = useAuth(authEnabled);
   const isAdmin = auth.user?.admin === true;
   const [tab, setTab] = useState<Tab>("akun");
   const [users, setUsers] = useState<Users | null>(null);
   const [orders, setOrders] = useState<Orders | null>(null);
   const [bans, setBans] = useState<Bans | null>(null);
+  const [apiBlocks, setApiBlocks] = useState<ApiBlocks | null>(null);
+  const [apiPick, setApiPick] = useState("");
+  const [apiFilter, setApiFilter] = useState("");
+  const [apiReason, setApiReason] = useState("");
   const [payment, setPayment] = useState<Payment | null>(null);
   const [errors, setErrors] = useState<Partial<Record<Tab, string>>>({});
   const [loading, setLoading] = useState(false);
@@ -131,13 +154,14 @@ export function AdminPanel({ authEnabled, plans, planDays }: { authEnabled: bool
   }, []);
 
   const load = useCallback(async () => {
-    const [u, o, b, p] = await Promise.all([call<Users>("users"), call<Orders>("orders"), call<Bans>("bans"), call<Payment>("paket")]);
+    const [u, o, b, p, a] = await Promise.all([call<Users>("users"), call<Orders>("orders"), call<Bans>("bans"), call<Payment>("paket"), call<ApiBlocks>("apiblocks")]);
     if (!alive.current) return;
     if (u.result) setUsers(u.result);
     if (o.result) setOrders(o.result);
     if (b.result) setBans(b.result);
     if (p.result) setPayment(p.result);
-    setErrors({ akun: u.ok ? undefined : u.error, pesanan: o.ok ? undefined : o.error, blokir: b.ok ? undefined : b.error, pembayaran: p.ok ? undefined : p.error });
+    if (a.result) setApiBlocks(a.result);
+    setErrors({ akun: u.ok ? undefined : u.error, pesanan: o.ok ? undefined : o.error, blokir: b.ok ? undefined : b.error, api: a.ok ? undefined : a.error, pembayaran: p.ok ? undefined : p.error });
     setLoading(false);
   }, []);
 
@@ -152,19 +176,20 @@ export function AdminPanel({ authEnabled, plans, planDays }: { authEnabled: bool
   };
 
   /** Jalankan satu aksi, tampilkan hasilnya, lalu muat ulang daftar. */
-  async function run(id: string, action: string, params: Record<string, string>, done: string) {
+  async function run(id: string, action: string, params: Record<string, string>, done: string): Promise<boolean> {
     setBusy(id);
     setNotice(null);
     const r = await call<{ message?: string }>(action, params);
-    if (!alive.current) return;
+    if (!alive.current) return false;
     setBusy(null);
     if (!r.ok) {
       setNotice({ tone: "danger", text: r.error });
-      return;
+      return false;
     }
     setNotice({ tone: "ok", text: done });
     setEditing(null);
     await load();
+    return true;
   }
 
   if (!authEnabled) {
@@ -229,7 +254,21 @@ export function AdminPanel({ authEnabled, plans, planDays }: { authEnabled: bool
   const shown = users ? users.users.filter((u) => !needle || u.email.includes(needle) || u.username.toLowerCase().includes(needle) || u.name.toLowerCase().includes(needle)) : [];
   const pickedPlan = plans.find((p) => p.id === planPick);
   const daysOk = !pickedPlan?.paid || (/^\d{1,4}$/.test(daysPick) && Number(daysPick) >= 1 && Number(daysPick) <= 3650);
-  const first = users === null && orders === null && bans === null && payment === null && Object.keys(errors).length === 0;
+  const first = users === null && orders === null && bans === null && payment === null && apiBlocks === null && Object.keys(errors).length === 0;
+
+  // Tab Blokir API: pilihan endpoint per kategori, disaring oleh kata yang diketik admin.
+  const blockedNow = new Set(apiBlocks?.blocks.map((b) => b.path) ?? []);
+  const apiNeedle = apiFilter.trim().toLowerCase();
+  const apiGroups = categories
+    .map((c) => {
+      const all = endpoints.filter((e) => e.category === c.id);
+      const whole = !apiNeedle || c.name.toLowerCase().includes(apiNeedle) || c.id.includes(apiNeedle);
+      return { c, count: all.length, items: whole ? all : all.filter((e) => `${e.title} ${e.id}`.toLowerCase().includes(apiNeedle)) };
+    })
+    .filter((g) => g.items.length > 0);
+  const apiOffered = apiGroups.reduce((n, g) => n + g.items.length, 0);
+  // Pilihan yang tersaring keluar dari daftar dianggap belum dipilih.
+  const apiTarget = apiGroups.some((g) => apiPick === `${g.c.id}/*` || g.items.some((e) => e.id === apiPick)) && !blockedNow.has(apiPick) ? apiPick : "";
 
   const stats = [
     { label: "Akun", value: users ? fmt(users.total) : "-" },
@@ -277,6 +316,7 @@ export function AdminPanel({ authEnabled, plans, planDays }: { authEnabled: bool
               className={`relative min-h-11 shrink-0 px-4 text-[0.9375rem] transition-colors duration-150 ${tab === t.id ? "font-semibold text-fg" : "text-muted hover:text-fg"}`}
             >
               {t.label}
+              {t.id === "api" && apiBlocks && apiBlocks.total > 0 ? ` (${fmt(apiBlocks.total)})` : ""}
               {tab === t.id && <span className="absolute inset-x-4 bottom-0 h-0.5 bg-accent" aria-hidden />}
             </button>
           ))}
@@ -470,8 +510,8 @@ export function AdminPanel({ authEnabled, plans, planDays }: { authEnabled: bool
                   if (!ip) return;
                   const params: Record<string, string> = { ip };
                   if (banReason.trim()) params.reason = banReason.trim();
-                  void run("ipban", "ban", params, `IP ${ip} diblokir.`).then(() => {
-                    if (alive.current) {
+                  void run("ipban", "ban", params, `IP ${ip} diblokir.`).then((ok) => {
+                    if (ok && alive.current) {
                       setBanIp("");
                       setBanReason("");
                     }
@@ -514,6 +554,97 @@ export function AdminPanel({ authEnabled, plans, planDays }: { authEnabled: bool
                       </div>
                       <button type="button" disabled={!!busy} onClick={() => void run(`unban:${b.ip}`, "unban", { ip: b.ip }, `Blokir untuk ${b.ip} dibuka.`)} className="btn btn-secondary shrink-0">
                         {busy === `unban:${b.ip}` ? "Membuka…" : "Buka blokir"}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+
+          {tab === "api" && (
+            <section className="space-y-4">
+              <form
+                className="border border-line bg-card p-4 sm:p-6"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!apiTarget) return;
+                  const params: Record<string, string> = { path: apiTarget };
+                  if (apiReason.trim()) params.reason = apiReason.trim();
+                  void run("apiblock", "apiblock", params, `/api/${apiTarget} dinonaktifkan.`).then((ok) => {
+                    if (ok && alive.current) {
+                      setApiPick("");
+                      setApiReason("");
+                      setApiFilter("");
+                    }
+                  });
+                }}
+              >
+                <h2 className="font-mono text-lg font-bold">Nonaktifkan endpoint</h2>
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[1fr_2fr]">
+                  <div>
+                    <label htmlFor={`${ids}-api-saring`} className="block text-sm font-medium">
+                      Saring daftar
+                    </label>
+                    <input id={`${ids}-api-saring`} type="search" value={apiFilter} onChange={(e) => setApiFilter(e.target.value)} placeholder="mis. film, tiktok" autoComplete="off" spellCheck={false} className="field mt-1" />
+                  </div>
+                  <div>
+                    <label htmlFor={`${ids}-api-pilih`} className="block text-sm font-medium">
+                      Endpoint atau kategori
+                    </label>
+                    <select id={`${ids}-api-pilih`} value={apiTarget} onChange={(e) => setApiPick(e.target.value)} aria-describedby={`${ids}-api-help`} className="field mt-1">
+                      <option value="">{apiOffered === 0 ? "Tidak ada endpoint yang cocok" : `Pilih dari ${fmt(apiOffered)} endpoint`}</option>
+                      {apiGroups.map((g) => (
+                        <optgroup key={g.c.id} label={g.c.name}>
+                          <option value={`${g.c.id}/*`} disabled={blockedNow.has(`${g.c.id}/*`)}>
+                            Semua endpoint {g.c.name} ({fmt(g.count)}){blockedNow.has(`${g.c.id}/*`) ? ", sudah nonaktif" : ""}
+                          </option>
+                          {g.items.map((e) => (
+                            <option key={e.id} value={e.id} disabled={blockedNow.has(e.id)}>
+                              {e.title} (/api/{e.id}){blockedNow.has(e.id) ? ", sudah nonaktif" : ""}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                  <div>
+                    <label htmlFor={`${ids}-api-alasan`} className="block text-sm font-medium">
+                      Alasan (opsional, tampil ke pengguna)
+                    </label>
+                    <input id={`${ids}-api-alasan`} value={apiReason} onChange={(e) => setApiReason(e.target.value)} placeholder="mis. Sumber data sedang gangguan" maxLength={300} autoComplete="off" className="field mt-1" />
+                  </div>
+                  <button type="submit" disabled={!!busy || !apiTarget} className="btn btn-danger">
+                    {busy === "apiblock" ? "Menonaktifkan…" : "Nonaktifkan"}
+                  </button>
+                </div>
+                <p id={`${ids}-api-help`} className="mt-2 text-sm text-muted">
+                  Permintaan ke endpoint yang dinonaktifkan dijawab 503 beserta alasannya dan tidak mengurangi kuota pengguna. Endpoint itu juga ditandai Nonaktif di halaman dokumentasi. Berlaku di semua server dalam 30 detik.
+                </p>
+              </form>
+
+              {!apiBlocks && !errors.api && <div className="h-32 animate-pulse bg-subtle" aria-hidden />}
+              {apiBlocks && apiBlocks.blocks.length === 0 && <p className="border border-line bg-card p-4 text-muted">Tidak ada endpoint yang sedang dinonaktifkan.</p>}
+              {apiBlocks && apiBlocks.blocks.length > 0 && (
+                <ul className="space-y-3">
+                  {apiBlocks.blocks.map((b) => (
+                    <li key={b.path} className="flex flex-col gap-3 border border-line bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <h2 className="wrap-anywhere font-mono text-base font-bold">/api/{b.path}</h2>
+                          {b.scope === "category" && <Badge tone="danger">Satu kategori</Badge>}
+                          {b.exists === false && <Badge>Endpoint sudah tidak ada</Badge>}
+                        </div>
+                        {b.title && <p className="mt-1 text-sm">{b.title}</p>}
+                        <p className="wrap-anywhere mt-1 text-sm text-muted">
+                          {b.reason || "Tanpa alasan"}
+                          {b.created_at ? `, sejak ${moment(b.created_at)}` : ""}
+                        </p>
+                      </div>
+                      <button type="button" disabled={!!busy} onClick={() => void run(`apiunblock:${b.path}`, "apiunblock", { path: b.path }, `/api/${b.path} aktif lagi.`)} className="btn btn-secondary shrink-0">
+                        {busy === `apiunblock:${b.path}` ? "Mengaktifkan…" : "Aktifkan lagi"}
                       </button>
                     </li>
                   ))}

@@ -32,7 +32,11 @@ function scrollToEl(el: Element | null | undefined) {
   window.scrollTo({ top: Math.max(0, top), behavior: calm ? "auto" : "smooth" });
 }
 
-function EndpointCard({ e, fallback, forceOpen, keyRequired }: { e: EndpointMeta; fallback: string; forceOpen: boolean; keyRequired: boolean }) {
+/** Blokir yang sedang berlaku: kunci "kategori/slug" atau "kategori/*", nilainya alasan dari admin (boleh kosong). */
+type Blocks = Record<string, string>;
+
+/** `blocked` berisi alasan dari admin (boleh kosong) bila endpoint ini sedang dinonaktifkan. */
+function EndpointCard({ e, fallback, forceOpen, keyRequired, blocked }: { e: EndpointMeta; fallback: string; forceOpen: boolean; keyRequired: boolean; blocked?: string }) {
   const id = `${e.category}-${e.slug}`;
   const origin = useOrigin(fallback);
   // `apiKey` dikirim bersama permintaan; `shownKey` tampil di URL dan contoh kode (teks pengganti bila belum ada key).
@@ -197,6 +201,7 @@ function EndpointCard({ e, fallback, forceOpen, keyRequired }: { e: EndpointMeta
             <span className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
               <span className="text-base font-semibold">{e.title}</span>
               <code className="wrap-anywhere font-mono text-sm text-muted">{e.path}</code>
+              {blocked !== undefined && <span className="border border-danger px-1.5 font-mono text-xs font-semibold text-danger">Nonaktif</span>}
             </span>
             <span className="mt-1 block text-sm text-muted">{e.description}</span>
           </span>
@@ -210,6 +215,11 @@ function EndpointCard({ e, fallback, forceOpen, keyRequired }: { e: EndpointMeta
           <div className="grid grid-cols-1 border-t border-line lg:grid-cols-2">
             {/* kiri: parameter */}
             <form onSubmit={onSubmit} noValidate className="min-w-0 space-y-5 p-4 sm:p-5">
+              {blocked !== undefined && (
+                <p role="note" className="wrap-anywhere border border-danger p-3 text-sm font-medium text-danger">
+                  Endpoint ini sedang dinonaktifkan oleh admin{blocked ? `. Alasan: ${blocked.replace(/[.\s]+$/, "")}` : ""}. Permintaan ke sini dijawab 503 sampai endpoint diaktifkan lagi.
+                </p>
+              )}
               {e.upload && (
                 <div>
                   <label htmlFor={`${id}-file`} className="flex flex-wrap items-center gap-2">
@@ -441,6 +451,22 @@ export function DocsExplorer({
 }) {
   const [q, setQ] = useState("");
   const input = useRef<HTMLInputElement>(null);
+  const [blocks, setBlocks] = useState<Blocks>({});
+
+  // Endpoint yang sedang dinonaktifkan admin. Bila daftar ini gagal dimuat, kartu tampil seperti biasa.
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/status", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { blocked?: { path?: string; reason?: string }[] } | null) => {
+        if (!alive || !Array.isArray(d?.blocked) || d.blocked.length === 0) return;
+        setBlocks(Object.fromEntries(d.blocked.filter((b) => typeof b.path === "string").map((b) => [String(b.path).replace(/^\/api\//, ""), b.reason || ""])));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     const on = (ev: KeyboardEvent) => {
@@ -552,7 +578,7 @@ export function DocsExplorer({
             const cards = (
               <div className="space-y-2">
                 {items.map((e) => (
-                  <EndpointCard key={e.path} e={e} fallback={fallback} forceOpen={!!term && filtered.length === 1} keyRequired={keyRequired} />
+                  <EndpointCard key={e.path} e={e} fallback={fallback} forceOpen={!!term && filtered.length === 1} keyRequired={keyRequired} blocked={blocks[`${e.category}/${e.slug}`] ?? blocks[`${e.category}/*`]} />
                 ))}
               </div>
             );

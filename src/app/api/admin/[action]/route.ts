@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { adminBan, adminListBans, adminUnban } from "@/lib/guard";
+import { adminBlockApi, adminListBlocks, adminUnblockApi, describeTarget, normalizeTarget, targetExists } from "@/lib/blocks";
 import { IMAGE_NAME_RE, hasImageStore, listImages, removeImages } from "@/lib/images";
 import { AUTH_BASE_READY, AUTH_ENABLED } from "@/lib/auth/config";
 import { forgetAllKeys } from "@/lib/auth/apikey";
@@ -16,10 +17,13 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 /**
- * Endpoint khusus owner dan akun admin untuk mengelola blokir IP, gambar unggahan, akun pengguna, dan paket.
+ * Endpoint khusus owner dan akun admin untuk mengelola blokir IP, blokir API, gambar unggahan, akun pengguna, dan paket.
  *   /api/admin/bans?key=ADMIN_KEY               daftar IP yang diblokir
  *   /api/admin/unban?ip=1.2.3.4&key=ADMIN_KEY   buka blokir
  *   /api/admin/ban?ip=1.2.3.4&reason=..&key=..  blokir manual
+ *   /api/admin/apiblocks?key=ADMIN_KEY          daftar endpoint yang dinonaktifkan
+ *   /api/admin/apiblock?path=film/lk21&reason=..&key=..   nonaktifkan satu endpoint; path=film/* untuk satu kategori penuh
+ *   /api/admin/apiunblock?path=film/lk21&key=.. aktifkan lagi
  *   /api/admin/images?key=ADMIN_KEY             100 gambar unggahan terbaru
  *   /api/admin/delimage?name=..&key=ADMIN_KEY   hapus satu gambar unggahan
  *   /api/admin/users?key=ADMIN_KEY              100 akun terbaru (API key disamarkan)
@@ -83,6 +87,23 @@ export async function GET(req: Request, ctx: { params: Promise<{ action: string 
     if (action === "bans") {
       const bans = await adminListBans();
       return json(200, { result: { total: bans.length, bans } });
+    }
+    if (action === "apiblocks") {
+      const blocks = (await adminListBlocks()).map((b) => ({ ...b, ...describeTarget(b.path) }));
+      return json(200, { result: { total: blocks.length, blocks } });
+    }
+    if (action === "apiblock" || action === "apiunblock") {
+      const target = normalizeTarget(sp.get("path"));
+      if (!target) return json(400, { error: "Parameter 'path' wajib diisi dengan endpoint, mis. film/lk21, atau satu kategori penuh, mis. film/*." });
+      const shown = `/api/${target}`;
+      if (action === "apiunblock") {
+        if (!(await adminUnblockApi(target))) return json(404, { error: `${shown} tidak sedang diblokir.` });
+        return json(200, { result: { path: target, blocked: false, message: `${shown} aktif lagi. Berlaku penuh di semua server dalam ±30 detik.` } });
+      }
+      if (!targetExists(target)) return json(404, { error: `Tidak ada endpoint ${shown}. Lihat daftar endpoint di /docs atau GET /api.` });
+      const reason = (sp.get("reason") || "").trim().slice(0, 300);
+      await adminBlockApi(target, reason);
+      return json(200, { result: { path: target, blocked: true, reason, ...describeTarget(target), message: `${shown} dinonaktifkan. Berlaku penuh di semua server dalam ±30 detik.` } });
     }
     if (action === "images" || action === "delimage") {
       if (!hasImageStore()) return json(503, { error: "Penyimpanan gambar belum dikonfigurasi di server ini." });
@@ -163,7 +184,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ action: string 
       await adminBan(ip, reason);
       return json(200, { result: { ip, banned: true, reason } });
     }
-    return json(404, { error: "Aksi tidak dikenal. Gunakan: bans, ban, unban, images, delimage, users, userban, userunban, setplan, setadmin, orders, paket." });
+    return json(404, { error: "Aksi tidak dikenal. Gunakan: bans, ban, unban, apiblocks, apiblock, apiunblock, images, delimage, users, userban, userunban, setplan, setadmin, orders, paket." });
   } catch (e) {
     console.error("[api/admin]", e);
     return json(502, { error: "Gagal menghubungi database atau penyimpanan." });

@@ -8,6 +8,7 @@ import { KEY_REQUIRED } from "@/lib/auth/config";
 import { keyFromRequest, keyKnown, keyOwnerId, keyPaid, keyQuota, keyUse, verifyKey, withKeyInHtml, withKeyInLinks } from "@/lib/auth/apikey";
 import { formatNumber } from "@/lib/plans";
 import { recordUsage } from "@/lib/auth/usage";
+import { endpointBlock } from "@/lib/blocks";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -88,6 +89,19 @@ async function handle(req: Request, ctx: RouteCtx) {
       `Terlalu banyak permintaan: batasnya ${RATE_LIMIT} per menit per IP. Coba lagi dalam ${verdict.retryAfter} detik. Pelanggaran berulang membuat IP diblokir.`,
       rlHeaders,
       { limit: RATE_LIMIT, retry_after: verdict.retryAfter, strikes: verdict.strikes },
+    );
+  }
+
+  // Endpoint yang dinonaktifkan admin: dijawab di sini, sebelum API key diperiksa, supaya tidak
+  // mengurangi kuota harian. Batas per menit di atas tetap berlaku.
+  const block = await endpointBlock(key);
+  if (block) {
+    const whole = block.path.endsWith("/*");
+    return fail(
+      503,
+      `${whole ? `Semua endpoint '/api/${block.path.slice(0, -2)}'` : `Endpoint '/api/${key}'`} sedang dinonaktifkan oleh admin${block.reason ? `. Alasan: ${block.reason.replace(/[.\s]+$/, "")}` : ""}. Coba lagi nanti, atau lihat endpoint lain di ${origin}/docs.`,
+      { ...rlHeaders, "x-endpoint-blocked": "1" },
+      { blocked: true, reason: block.reason, docs: `${origin}/docs` },
     );
   }
 

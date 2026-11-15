@@ -58,9 +58,24 @@ Read the response (async, usually ready in under a second):
 select id, status_code, content from net._http_response order by id desc limit 1;
 ```
 
-Housekeeping: responses are stored in `net._http_response` for a few hours — `delete from
-net._http_response;` after reading anything that touched the API key. Public GETs can also be read
-with a plain page fetch, no key needed.
+Housekeeping: responses are stored in `net._http_response` — `delete from net._http_response;`
+after reading anything that touched the API key. Public GETs can also be read with a plain page
+fetch, no key needed.
+
+Measured on this project (pg_net 0.20.4), so treat the table as public:
+
+| Check | Value |
+| --- | --- |
+| `has_table_privilege('anon','net._http_response','SELECT')` | `true` |
+| `has_schema_privilege('anon','net','USAGE')` | `true` |
+| `relrowsecurity` | `false` |
+| owner | `supabase_admin` |
+| `pg_net.ttl` | `6 hours` |
+| `timeout_milliseconds` | per-call argument on `net.http_post`, default `5000` |
+
+The remaining gate is whether `net` is in the PostgREST exposed schema list, which is not visible
+from SQL here — so assume it may be and delete rows immediately. Also check `net.http_request_queue`:
+it holds outbound headers, Authorization included.
 
 ## Heartbeat
 

@@ -11,3 +11,14 @@ export function authOrigin(req: Request): string {
 }
 
 export const googleRedirectUri = (req: Request) => `${authOrigin(req)}/auth/google/callback`;
+
+/** Permintaan yang mengubah sesuatu harus datang dari halaman situs ini sendiri. */
+export function sameSite(req: Request): boolean {
+  const origin = req.headers.get("origin");
+  if (!origin) return req.headers.get("sec-fetch-site") !== "cross-site";
+  try {
+    return new URL(origin).host === new URL(getOrigin(req)).host;
+  } catch {
+    return false;
+  }
+}

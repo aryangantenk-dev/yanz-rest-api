@@ -5,6 +5,9 @@ import { IMAGE_NAME_RE, hasImageStore, listImages, removeImages } from "@/lib/im
 import { AUTH_BASE_READY } from "@/lib/auth/config";
 import { forgetAllKeys } from "@/lib/auth/apikey";
 import { adminUsers, normalizeEmail, setBanned } from "@/lib/auth/users";
+import { adminOrders, adminSetPlan } from "@/lib/billing/orders";
+import { FEE_ON_CUSTOMER, GATEWAY_READY, WEBHOOK_READY, pingGateway } from "@/lib/billing/welper";
+import { PLANS, PLAN_DAYS, planById } from "@/lib/plans";
 import { SITE_CREATOR, getOrigin } from "@/lib/site";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +23,10 @@ export const runtime = "nodejs";
  *   /api/admin/users?key=ADMIN_KEY              100 akun terbaru (API key disamarkan)
  *   /api/admin/userban?email=..&key=ADMIN_KEY   nonaktifkan akun beserta API key-nya
  *   /api/admin/userunban?email=..&key=..        aktifkan lagi
+ *   /api/admin/setplan?email=..&plan=pro&days=30&key=..   beri paket tanpa pembayaran (menambah masa aktif);
+ *                                                        plan=free mengembalikan akun ke paket gratis
+ *   /api/admin/orders?key=ADMIN_KEY             100 pesanan paket terbaru dan total yang lunas
+ *   /api/admin/paket?key=ADMIN_KEY              status konfigurasi pembayaran dan koneksi ke gateway
  * Kunci juga boleh dikirim lewat header `x-admin-key`.
  */
 const json = (status: number, body: Record<string, unknown>) =>
@@ -59,9 +66,36 @@ export async function GET(req: Request, ctx: { params: Promise<{ action: string 
       if (!removed) return json(404, { error: "Gambar tidak ditemukan atau sudah dihapus." });
       return json(200, { result: { name, deleted: true, message: "Gambar dihapus. Salinan di cache bisa masih tampil paling lama satu jam." } });
     }
-    if (action === "users" || action === "userban" || action === "userunban") {
+    if (action === "paket") {
+      const origin = getOrigin(req);
+      return json(200, {
+        result: {
+          plans: PLANS,
+          plan_days: PLAN_DAYS,
+          api_key_set: GATEWAY_READY,
+          webhook_secret_set: WEBHOOK_READY,
+          fee_bearer: FEE_ON_CUSTOMER ? "customer" : "merchant",
+          gateway_reachable: await pingGateway(),
+          webhook_url: `${origin}/api/paket/webhook`,
+        },
+      });
+    }
+    if (action === "users" || action === "userban" || action === "userunban" || action === "setplan" || action === "orders") {
       if (!AUTH_BASE_READY) return json(503, { error: "Login belum dikonfigurasi di server ini (butuh Supabase dan AUTH_SECRET)." });
       if (action === "users") return json(200, { result: await adminUsers(100) });
+      if (action === "orders") return json(200, { result: await adminOrders(100) });
+      if (action === "setplan") {
+        const email = normalizeEmail(sp.get("email"));
+        if (!email) return json(400, { error: "Parameter 'email' wajib diisi dengan alamat email akun." });
+        const plan = planById((sp.get("plan") || "").trim().toLowerCase());
+        if (!plan) return json(400, { error: `Parameter 'plan' wajib diisi dengan salah satu dari: ${PLANS.map((p) => p.id).join(", ")}.` });
+        const days = plan.price > 0 ? Number(sp.get("days") ?? PLAN_DAYS) : 0;
+        if (plan.price > 0 && !(Number.isInteger(days) && days >= 1 && days <= 3650)) return json(400, { error: "Parameter 'days' harus bilangan bulat 1 sampai 3650." });
+        const set = await adminSetPlan(email, plan.id, days);
+        if (!set) return json(404, { error: "Tidak ada akun dengan email itu." });
+        forgetAllKeys();
+        return json(200, { result: { ...set, message: "Paket diperbarui. Berlaku di semua server paling lama satu menit lagi." } });
+      }
       const email = normalizeEmail(sp.get("email"));
       if (!email) return json(400, { error: "Parameter 'email' wajib diisi dengan alamat email akun." });
       const banned = action === "userban";
@@ -82,7 +116,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ action: string 
       await adminBan(ip, reason);
       return json(200, { result: { ip, banned: true, reason } });
     }
-    return json(404, { error: "Aksi tidak dikenal. Gunakan: bans, ban, unban, images, delimage, users, userban, userunban." });
+    return json(404, { error: "Aksi tidak dikenal. Gunakan: bans, ban, unban, images, delimage, users, userban, userunban, setplan, orders, paket." });
   } catch (e) {
     console.error("[api/admin]", e);
     return json(502, { error: "Gagal menghubungi database atau penyimpanan." });

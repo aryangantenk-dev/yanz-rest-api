@@ -1,7 +1,9 @@
 import { SITE_PITCH } from "@/lib/site";
 import Link from "next/link";
 import { categories } from "@/lib/api/categories";
+import { KEY_REQUIRED } from "@/lib/auth/config";
 import { RATE_LIMIT } from "@/lib/limits";
+import { FREE_PLAN, formatNumber } from "@/lib/plans";
 import { LogoMark } from "./icons";
 
 const linkClass = "inline-flex min-h-11 items-center text-muted transition-colors duration-150 hover:text-fg sm:min-h-8";
@@ -40,6 +42,7 @@ export function SiteFooter({ total }: { total: number }) {
           <ul className="mt-3 text-sm">
             <li><Link href="/docs" className={linkClass}>Dokumentasi lengkap</Link></li>
             <li><Link href="/dashboard" className={linkClass}>Dashboard</Link></li>
+            <li><Link href="/paket" className={linkClass}>Paket</Link></li>
             <li>
               {/* /api adalah route handler yang mengembalikan JSON, bukan halaman, jadi dibuka dengan navigasi biasa. */}
               {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
@@ -54,7 +57,9 @@ export function SiteFooter({ total }: { total: number }) {
       <div className="border-t border-line">
         <div className="mx-auto flex max-w-6xl flex-col gap-1 px-4 py-5 text-sm text-muted sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <p>© {new Date().getFullYear()} yanz.api</p>
-          <p className="tnum">Batas {RATE_LIMIT} permintaan per menit untuk setiap IP</p>
+          <p className="tnum">
+            {KEY_REQUIRED ? `Paket ${FREE_PLAN.name}: ${formatNumber(FREE_PLAN.daily)} permintaan per hari, ${RATE_LIMIT} per menit untuk setiap IP` : `Batas ${RATE_LIMIT} permintaan per menit untuk setiap IP`}
+          </p>
         </div>
       </div>
     </footer>

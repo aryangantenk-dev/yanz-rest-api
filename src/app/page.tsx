@@ -12,12 +12,15 @@ import { APPEAL_URL } from "@/lib/guard";
 import { colorizeJson } from "@/lib/highlight";
 import { RATE_LIMIT } from "@/lib/limits";
 import { KEY_REQUIRED } from "@/lib/auth/config";
+import { FREE_PLAN, PLANS, PLAN_DAYS, formatNumber, rupiah } from "@/lib/plans";
 import { showcase, showcaseHost } from "@/lib/showcase";
 import { SITE_CREATOR, SITE_NAME, SITE_TAGLINE, SITE_URL, SUPPORT_URL } from "@/lib/site";
 
 export const metadata: Metadata = {
   alternates: { canonical: "/" },
 };
+
+const PAID_PLAN = PLANS.find((p) => p.price > 0);
 
 const steps = [
   KEY_REQUIRED
@@ -31,7 +34,7 @@ const steps = [
 
 const features = [
   KEY_REQUIRED
-    ? { t: "API key gratis", d: "Masuk dengan Google atau email dan API key langsung jadi. Tidak ada biaya atau kuota tersembunyi." }
+    ? { t: "API key gratis", d: `Masuk dengan Google atau email dan API key langsung jadi. Paket ${FREE_PLAN.name} memberi ${formatNumber(FREE_PLAN.daily)} permintaan per hari tanpa biaya.` }
     : { t: "Tanpa API key", d: "Tidak ada pendaftaran, token, atau kuota tersembunyi. Salin URL-nya, langsung jalan." },
   { t: "CORS terbuka", d: "Panggil dari browser, aplikasi mobile, bot WhatsApp atau Telegram, bahkan dari file HTML lokal." },
   { t: "Format respons seragam", d: "Setiap endpoint JSON mengembalikan status, creator, dan result, jadi parser cukup ditulis sekali." },
@@ -47,8 +50,18 @@ const faqs = [
       KEY_REQUIRED
         ? "Gratis. Daftar dengan akun Google atau dengan email (kami kirim kode verifikasi), pilih username, lalu API key berawalan yn- langsung dibuat untukmu. Sertakan key itu sebagai parameter apikey di setiap permintaan."
         : "Ya. Semua endpoint bisa dipanggil langsung tanpa registrasi maupun API key."
-    } Untuk menjaga kualitas layanan, berlaku batas ${RATE_LIMIT} permintaan per menit untuk setiap alamat IP. IP yang berulang kali melewati batas akan diblokir dan bisa mengajukan banding ke owner lewat WhatsApp.`,
+    } ${
+      KEY_REQUIRED ? `Paket ${FREE_PLAN.name} memberi ${formatNumber(FREE_PLAN.daily)} permintaan per hari untuk setiap akun, dan kuotanya terisi lagi pukul 00.00 WIB. ` : ""
+    }Untuk menjaga kualitas layanan, berlaku batas ${RATE_LIMIT} permintaan per menit untuk setiap alamat IP. IP yang berulang kali melewati batas akan diblokir dan bisa mengajukan banding ke owner lewat WhatsApp.`,
   },
+  ...(KEY_REQUIRED && PAID_PLAN
+    ? [
+        {
+          q: `Apa bedanya paket ${FREE_PLAN.name} dan ${PAID_PLAN.name}?`,
+          a: `Semua endpoint bisa dipakai di kedua paket. Paket ${PAID_PLAN.name} (${rupiah(PAID_PLAN.price)} per ${PLAN_DAYS} hari, dibayar lewat QRIS) menaikkan kuota menjadi ${formatNumber(PAID_PLAN.daily)} permintaan per hari dan ${formatNumber(PAID_PLAN.perMinute)} per menit per akun. Rinciannya ada di halaman Paket.`,
+        },
+      ]
+    : []),
   { q: "Bagaimana format respons yang dikembalikan?", a: "Endpoint data mengembalikan JSON dengan pola { status, creator, result }. Bila terjadi kesalahan, kamu menerima { status: false, code, error } disertai kode HTTP yang sesuai. Endpoint kategori Image, Canvas, dan beberapa endpoint tools mengembalikan file gambar PNG secara langsung." },
   { q: "Bolehkah dipakai untuk bot WhatsApp, Telegram, atau Discord?", a: "Tentu. CORS terbuka dan responsnya ringan sehingga cocok dipakai pada bot, aplikasi web, dan proyek hobi. Mohon tidak menyalahgunakannya untuk spam atau aktivitas yang melanggar hukum." },
   { q: "Dari mana data cuaca, gempa, dan jadwal sholat berasal?", a: `Gempa diambil langsung dari BMKG, cuaca dari Open-Meteo, dan jadwal sholat serta Al-Qur'an dari layanan terbuka yang terpercaya. ${SITE_NAME} merapikan datanya agar konsisten dan mudah dipakai.` },

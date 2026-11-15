@@ -532,3 +532,282 @@ revoke all on function public.auth_usage_hit(uuid, text, boolean) from public, a
 revoke all on function public.auth_usage_summary(uuid, integer) from public, anon, authenticated;
 grant execute on function public.auth_usage_hit(uuid, text, boolean) to service_role;
 grant execute on function public.auth_usage_summary(uuid, integer) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Paket: paket per akun, kuota harian per akun, dan pesanan pembayaran QRIS.
+-- Daftar paket (nama, harga, kuota) ada di src/lib/plans.ts; database hanya menyimpan
+-- id paket, masa aktifnya, dan riwayat pesanan.
+-- ---------------------------------------------------------------------------
+
+-- 'free' atau id paket berbayar. Paket berbayar hanya berlaku selama plan_expires_at belum lewat.
+alter table public.api_users add column if not exists plan text not null default 'free';
+alter table public.api_users add column if not exists plan_expires_at timestamptz;
+
+-- Satu baris per pesanan. id dipakai sebagai merchant_ref di payment gateway.
+-- status: pending | paid | expired | canceled | failed
+create table if not exists public.api_orders (
+  id text primary key,
+  user_id uuid references public.api_users(id) on delete set null,
+  plan text not null,
+  months integer not null,
+  days integer not null,
+  amount integer not null,
+  total integer,
+  fee integer,
+  status text not null default 'pending',
+  gateway_ref text not null default '',
+  payment_url text not null default '',
+  expires_at timestamptz,
+  created_at timestamptz not null default now(),
+  paid_at timestamptz
+);
+
+create index if not exists api_orders_user_idx on public.api_orders (user_id, created_at desc);
+
+alter table public.api_orders enable row level security;
+revoke all on table public.api_orders from anon, authenticated;
+grant all on table public.api_orders to service_role;
+
+create or replace function public.auth_user_json(u public.api_users)
+returns json
+language sql
+immutable
+set search_path = ''
+as $$
+  select json_build_object(
+    'id', u.id, 'email', u.email, 'name', u.name, 'avatar', u.avatar, 'provider', u.provider,
+    'username', coalesce(u.username, ''), 'photo', u.photo,
+    'api_key', u.api_key, 'banned', u.banned, 'created_at', u.created_at, 'last_login_at', u.last_login_at,
+    'plan', u.plan, 'plan_expires_at', u.plan_expires_at
+  );
+$$;
+
+-- Dipanggil untuk memeriksa API key pada setiap permintaan (hasilnya di-cache di server).
+-- Ikut membawa paket yang sedang berlaku dan pemakaian hari ini (WIB) untuk kuota harian.
+create or replace function public.auth_key_user(p_key text)
+returns json
+language sql
+stable
+set search_path = ''
+as $$
+  select json_build_object(
+    'id', u.id, 'banned', u.banned,
+    'plan', case when u.plan <> 'free' and u.plan_expires_at > now() then u.plan else 'free' end,
+    'plan_expires_at', u.plan_expires_at,
+    'used_today', coalesce((
+      select sum(a.hits) from public.api_usage a
+      where a.user_id = u.id and a.day = (now() at time zone 'Asia/Jakarta')::date
+    ), 0)
+  )
+  from public.api_users u where u.api_key = p_key;
+$$;
+
+-- Buka pesanan baru, atau pakai lagi pesanan serupa yang masih menunggu (klik ganda tidak
+-- membuat tagihan kedua). status: 'ok' (beserta order dan reused) atau 'limit' (terlalu
+-- banyak pesanan dalam satu jam).
+create or replace function public.plan_order_open(p_id text, p_user uuid, p_plan text, p_months integer, p_days integer, p_amount integer)
+returns json
+language plpgsql
+set search_path = ''
+as $$
+declare
+  o public.api_orders;
+begin
+  select * into o from public.api_orders
+  where user_id = p_user and status = 'pending' and plan = p_plan and months = p_months and amount = p_amount
+    and ((expires_at is null and created_at > now() - interval '5 minutes') or expires_at > now() + interval '2 minutes')
+  order by created_at desc limit 1;
+  if found then
+    return json_build_object('status', 'ok', 'reused', true, 'order', row_to_json(o));
+  end if;
+  if (select count(*) from public.api_orders where user_id = p_user and created_at > now() - interval '1 hour') >= 10 then
+    return json_build_object('status', 'limit');
+  end if;
+  insert into public.api_orders (id, user_id, plan, months, days, amount)
+  values (p_id, p_user, p_plan, p_months, p_days, p_amount)
+  returning * into o;
+  return json_build_object('status', 'ok', 'reused', false, 'order', row_to_json(o));
+end;
+$$;
+
+-- Simpan data tagihan dari payment gateway ke pesanan yang masih menunggu.
+create or replace function public.plan_order_attach(p_id text, p_ref text, p_url text, p_total integer, p_fee integer, p_expires timestamptz)
+returns json
+language plpgsql
+set search_path = ''
+as $$
+declare
+  o public.api_orders;
+begin
+  update public.api_orders
+  set gateway_ref = p_ref, payment_url = p_url, total = p_total, fee = p_fee, expires_at = p_expires
+  where id = p_id and status = 'pending'
+  returning * into o;
+  if not found then
+    return null;
+  end if;
+  return row_to_json(o);
+end;
+$$;
+
+create or replace function public.plan_order_get(p_id text)
+returns json
+language sql
+stable
+set search_path = ''
+as $$
+  select row_to_json(o) from public.api_orders o where o.id = p_id;
+$$;
+
+-- Tandai pesanan lunas dan aktifkan paketnya, dalam satu transaksi dan hanya sekali.
+-- status: 'paid' (baru saja diaktifkan), 'already' (sudah lunas sebelumnya), 'none' (pesanan
+-- tidak dikenal), atau 'mismatch' (nominal dari gateway tidak sama dengan pesanan).
+-- Membeli paket yang sama selagi masih aktif menambah masa aktifnya.
+create or replace function public.plan_order_paid(p_id text, p_ref text, p_amount integer)
+returns json
+language plpgsql
+set search_path = ''
+as $$
+declare
+  o public.api_orders;
+  u public.api_users;
+  base timestamptz;
+  v_until timestamptz;
+begin
+  select * into o from public.api_orders where id = p_id for update;
+  if not found then
+    return json_build_object('status', 'none');
+  end if;
+  if o.status = 'paid' then
+    return json_build_object('status', 'already', 'order', row_to_json(o));
+  end if;
+  if p_amount is distinct from o.amount then
+    return json_build_object('status', 'mismatch');
+  end if;
+
+  select * into u from public.api_users where id = o.user_id for update;
+  if found then
+    base := case when u.plan = o.plan and u.plan_expires_at > now() then u.plan_expires_at else now() end;
+    v_until := base + make_interval(days => o.days);
+    update public.api_users set plan = o.plan, plan_expires_at = v_until where id = u.id;
+  end if;
+
+  update public.api_orders
+  set status = 'paid', paid_at = now(), gateway_ref = case when coalesce(p_ref, '') <> '' then p_ref else gateway_ref end
+  where id = p_id
+  returning * into o;
+  return json_build_object('status', 'paid', 'order', row_to_json(o), 'plan', o.plan, 'plan_expires_at', v_until);
+end;
+$$;
+
+-- Tutup pesanan yang belum lunas (kedaluwarsa, dibatalkan, atau gagal dibuat di gateway).
+create or replace function public.plan_order_close(p_id text, p_status text)
+returns boolean
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if p_status not in ('expired', 'canceled', 'failed') then
+    return false;
+  end if;
+  update public.api_orders set status = p_status where id = p_id and status = 'pending';
+  return found;
+end;
+$$;
+
+-- Riwayat pesanan sebuah akun, terbaru dulu.
+create or replace function public.plan_orders(p_user uuid, p_limit integer)
+returns json
+language sql
+stable
+set search_path = ''
+as $$
+  select coalesce(json_agg(row_to_json(t)), '[]'::json) from (
+    select o.* from public.api_orders o where o.user_id = p_user
+    order by o.created_at desc limit greatest(1, least(p_limit, 50))
+  ) t;
+$$;
+
+-- Untuk owner (/api/admin/setplan): atur paket sebuah akun tanpa pembayaran.
+-- p_plan = 'free' atau p_days <= 0 mengembalikan akun ke paket gratis.
+create or replace function public.plan_admin_set(p_email text, p_plan text, p_days integer)
+returns json
+language plpgsql
+set search_path = ''
+as $$
+declare
+  u public.api_users;
+begin
+  select * into u from public.api_users where email = lower(p_email) for update;
+  if not found then
+    return null;
+  end if;
+  if p_plan = 'free' or p_days <= 0 then
+    update public.api_users set plan = 'free', plan_expires_at = null where id = u.id returning * into u;
+  else
+    update public.api_users set
+      plan = p_plan,
+      plan_expires_at = (case when u.plan = p_plan and u.plan_expires_at > now() then u.plan_expires_at else now() end) + make_interval(days => p_days)
+    where id = u.id returning * into u;
+  end if;
+  return json_build_object('email', u.email, 'username', coalesce(u.username, ''), 'plan', u.plan, 'plan_expires_at', u.plan_expires_at);
+end;
+$$;
+
+-- Untuk owner (/api/admin/orders): pesanan terbaru beserta email pembelinya.
+create or replace function public.plan_admin_orders(p_limit integer)
+returns json
+language sql
+stable
+set search_path = ''
+as $$
+  select json_build_object(
+    'paid', (select count(*) from public.api_orders where status = 'paid'),
+    'paid_amount', (select coalesce(sum(amount), 0) from public.api_orders where status = 'paid'),
+    'orders', (
+      select coalesce(json_agg(t), '[]'::json) from (
+        select o.id, coalesce(u.email, '') as email, coalesce(u.username, '') as username, o.plan, o.months, o.amount, o.total,
+               o.status, o.gateway_ref, o.created_at, o.paid_at
+        from public.api_orders o left join public.api_users u on u.id = o.user_id
+        order by o.created_at desc limit greatest(1, least(p_limit, 500))
+      ) t
+    )
+  );
+$$;
+
+-- Untuk owner (/api/admin/users): akun terbaru, API key disamarkan, beserta paketnya.
+create or replace function public.auth_admin_users(p_limit integer)
+returns json
+language sql
+stable
+set search_path = ''
+as $$
+  select json_build_object(
+    'total', (select count(*) from public.api_users),
+    'users', (
+      select coalesce(json_agg(t), '[]'::json) from (
+        select email, coalesce(username, '') as username, name, provider, banned, created_at, last_login_at,
+               left(api_key, 7) || '…' || right(api_key, 4) as api_key,
+               case when plan <> 'free' and plan_expires_at > now() then plan else 'free' end as plan, plan_expires_at
+        from public.api_users order by created_at desc limit greatest(1, least(p_limit, 500))
+      ) t
+    )
+  );
+$$;
+
+revoke all on function public.plan_order_open(text, uuid, text, integer, integer, integer) from public, anon, authenticated;
+revoke all on function public.plan_order_attach(text, text, text, integer, integer, timestamptz) from public, anon, authenticated;
+revoke all on function public.plan_order_get(text) from public, anon, authenticated;
+revoke all on function public.plan_order_paid(text, text, integer) from public, anon, authenticated;
+revoke all on function public.plan_order_close(text, text) from public, anon, authenticated;
+revoke all on function public.plan_orders(uuid, integer) from public, anon, authenticated;
+revoke all on function public.plan_admin_set(text, text, integer) from public, anon, authenticated;
+revoke all on function public.plan_admin_orders(integer) from public, anon, authenticated;
+grant execute on function public.plan_order_open(text, uuid, text, integer, integer, integer) to service_role;
+grant execute on function public.plan_order_attach(text, text, text, integer, integer, timestamptz) to service_role;
+grant execute on function public.plan_order_get(text) to service_role;
+grant execute on function public.plan_order_paid(text, text, integer) to service_role;
+grant execute on function public.plan_order_close(text, text) to service_role;
+grant execute on function public.plan_orders(uuid, integer) to service_role;
+grant execute on function public.plan_admin_set(text, text, integer) to service_role;
+grant execute on function public.plan_admin_orders(integer) to service_role;

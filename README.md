@@ -34,6 +34,9 @@ Kode berada langsung di root repository, jadi Vercel maupun Netlify mendeteksiny
 | `SMTP_USER` + `SMTP_PASS` | Mengaktifkan login email dengan kode verifikasi. Untuk Gmail isi alamat Gmail dan App password. `SMTP_HOST` (default `smtp.gmail.com`), `SMTP_PORT` (default `465`), dan `MAIL_FROM` opsional. |
 | `OTP_MAX_PER_HOUR` | Batas email kode per jam untuk seluruh situs. Default `100`. |
 | `REQUIRE_API_KEY` | Isi `0` untuk membuka endpoint tanpa API key walau login aktif. |
+| `WELPER_API_KEY` | API key payment gateway QRIS Welper (`gwk_…`) untuk menjual paket di `/paket`. Tanpa ini halaman paket tetap tampil, tetapi tombol bayar diganti ajakan menghubungi owner. |
+| `WELPER_WEBHOOK_SECRET` | Secret webhook Welper (`whsec_…`) untuk memeriksa tanda tangan notifikasi pembayaran di `/api/paket/webhook`. |
+| `WELPER_FEE_BEARER` | `customer` (default: pembeli menanggung biaya QRIS) atau `merchant` (biaya dipotong dari yang kamu terima). |
 
 Tanpa database, semua endpoint lain tetap berjalan normal. Lihat `.env.example`. Status database bisa dicek di `/api/health`.
 
@@ -74,6 +77,35 @@ Untuk owner (butuh `ADMIN_KEY`):
 ```
 
 Data akun ada di tabel `api_users`; kode verifikasi di `auth_otps` (yang disimpan hanya hash-nya). Sesi login adalah cookie bertanda tangan yang berlaku 30 hari.
+
+## Paket dan kuota harian
+
+Berlaku saat API key diwajibkan. Daftar paket ada di `src/lib/plans.ts` dan itulah satu-satunya tempat untuk mengubah nama, harga, dan kuota.
+
+| Paket | Harga | Kuota per hari | Batas per menit |
+| --- | --- | --- | --- |
+| Gratis | Rp0 | 1.000 permintaan per akun | 45 per IP |
+| Pro | Rp15.000 per 30 hari | 50.000 permintaan per akun | 300 per akun |
+
+- Kuota dihitung per akun dan terisi lagi pukul 00.00 WIB. Setiap jawaban membawa header `x-plan`, `x-quota-limit`, `x-quota-remaining`, dan `x-quota-reset` (detik). Saat kuota habis API menjawab HTTP `429` berisi `quota`, `used`, `retry_after`, dan tautan `upgrade`.
+- Angka pemakaian dibaca dari database paling lama tiap satu menit dan di antaranya dihitung di memori tiap instance, jadi kuota bisa terlewati sedikit saat lalu lintas tersebar ke banyak instance.
+- Akun paket berbayar dihitung per akun untuk batas per menit, terpisah dari hitungan IP, dan tidak pernah memicu blokir IP.
+- Membeli paket yang sama selagi masih aktif menambah masa aktifnya. Setelah masa aktif habis akun kembali ke paket Gratis dengan sendirinya; tidak ada perpanjangan otomatis.
+
+Pembayaran memakai payment gateway QRIS [Welper](https://welper.web.id/gateway/docs):
+
+1. Buat API key di halaman Developer Welper, lalu isi `WELPER_API_KEY` dan `WELPER_WEBHOOK_SECRET` di environment variable server.
+2. Isi URL webhook di halaman Developer dengan `<domain>/api/paket/webhook`.
+3. Pembeli memilih paket di `/paket`, diarahkan ke halaman bayar Welper, lalu kembali ke `/paket`. Paket aktif begitu webhook `payment.paid` diterima; halaman `/paket` juga memeriksa status tagihan langsung ke gateway sebagai cadangan bila webhook terlambat.
+
+Pesanan disimpan di tabel `api_orders`. Untuk owner (butuh `ADMIN_KEY`):
+
+```
+/api/admin/paket?key=ADMIN_KEY                              status konfigurasi pembayaran dan koneksi ke gateway
+/api/admin/orders?key=ADMIN_KEY                             100 pesanan terbaru dan total yang lunas
+/api/admin/setplan?email=a@b.com&plan=pro&days=30&key=…     beri paket tanpa pembayaran (menambah masa aktif)
+/api/admin/setplan?email=a@b.com&plan=free&key=…            kembalikan akun ke paket Gratis
+```
 
 ## Batas pemakaian dan blokir IP
 

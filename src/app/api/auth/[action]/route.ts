@@ -4,10 +4,12 @@ import { AUTH_ENABLED, HAS_EMAIL, HAS_GOOGLE, KEY_REQUIRED, OTP_TTL_SEC } from "
 import { forgetKey } from "@/lib/auth/apikey";
 import { hit } from "@/lib/auth/limit";
 import { sendOtpEmail } from "@/lib/auth/mail";
+import { sameSite } from "@/lib/auth/origin";
 import { clearSessionCookie, isSecure, otpHash, sessionCookie, sessionUserId } from "@/lib/auth/session";
 import { login, normalizeEmail, otpCancel, otpCheck, otpIssue, rotateKey, sessionBody, setPhoto, setUsername, userById, usernameTaken, type User } from "@/lib/auth/users";
 import { usageSummary } from "@/lib/auth/usage";
-import { RATE_LIMIT, clientIp } from "@/lib/guard";
+import { clientIp } from "@/lib/guard";
+import { activePlan } from "@/lib/plans";
 import { AVATAR_DIR, MAX_AVATAR_BYTES, hasImageStore, removeImages, saveImage, sniffImage } from "@/lib/images";
 import { USERNAME_TAKEN, cleanUsername, usernameProblem } from "@/lib/username";
 import { SITE_CREATOR, getOrigin } from "@/lib/site";
@@ -37,17 +39,6 @@ function json(status: number, body: Record<string, unknown>, setCookie?: string)
 }
 
 const fail = (status: number, error: string, extra: Record<string, unknown> = {}, setCookie?: string) => json(status, { code: status, error, ...extra }, setCookie);
-
-/** Permintaan yang mengubah sesuatu harus datang dari halaman situs ini sendiri. */
-function sameSite(req: Request): boolean {
-  const origin = req.headers.get("origin");
-  if (!origin) return req.headers.get("sec-fetch-site") !== "cross-site";
-  try {
-    return new URL(origin).host === new URL(getOrigin(req)).host;
-  } catch {
-    return false;
-  }
-}
 
 async function readBody(req: Request): Promise<Record<string, unknown>> {
   try {
@@ -86,7 +77,12 @@ async function usage(req: Request) {
   try {
     const user = await userById(id);
     if (!user || user.banned) return fail(401, "Sesi berakhir. Masuk lagi untuk melihat statistik.", {}, clearSessionCookie(isSecure(req)));
-    return json(200, { usage: await usageSummary(id), limit: RATE_LIMIT });
+    const plan = activePlan(user.plan, user.plan_expires_at);
+    return json(200, {
+      usage: await usageSummary(id),
+      limit: plan.perMinute,
+      plan: { id: plan.id, name: plan.name, daily: plan.daily, perMinute: plan.perMinute, paid: plan.price > 0, expires_at: plan.price > 0 ? (user.plan_expires_at ?? null) : null },
+    });
   } catch (e) {
     console.error("[auth/usage]", e);
     return fail(503, STORE_DOWN);

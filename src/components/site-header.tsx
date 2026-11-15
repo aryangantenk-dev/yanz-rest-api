@@ -7,12 +7,14 @@ import { useAuth } from "./auth-client";
 import { Avatar } from "./avatar";
 import { CloseIcon, LogoMark, MenuIcon, MoonIcon, SunIcon, UserIcon } from "./icons";
 
-const links = [
+/** `wide`: di deretan menu atas hanya tampil pada layar lebar (lg), supaya menunya muat di tablet. Menu seluler selalu memuat semuanya. */
+const links: { href: string; label: string; wide?: boolean }[] = [
   { href: "/docs", label: "Dokumentasi" },
   { href: "/dashboard", label: "Dashboard" },
+  { href: "/paket", label: "Paket" },
   { href: "/#kategori", label: "Kategori" },
-  { href: "/#mulai", label: "Cara pakai" },
-  { href: "/#contoh", label: "Contoh" },
+  { href: "/#mulai", label: "Cara pakai", wide: true },
+  { href: "/#contoh", label: "Contoh", wide: true },
   { href: "/#faq", label: "FAQ" },
 ];
 
@@ -77,7 +79,7 @@ export function SiteHeader({ authEnabled = false }: { authEnabled?: boolean }) {
                 key={l.href}
                 href={l.href}
                 aria-current={active ? "page" : undefined}
-                className={`relative flex min-h-11 items-center px-4 text-[0.9375rem] transition-colors duration-150 ${active ? "font-semibold text-fg" : "text-muted hover:text-fg"}`}
+                className={`relative min-h-11 items-center px-4 text-[0.9375rem] transition-colors duration-150 ${l.wide ? "hidden lg:flex" : "flex"} ${active ? "font-semibold text-fg" : "text-muted hover:text-fg"}`}
               >
                 {l.label}
                 {active && <span className="absolute inset-x-4 bottom-1 h-0.5 bg-accent" aria-hidden />}

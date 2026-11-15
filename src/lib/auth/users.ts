@@ -18,6 +18,9 @@ export type User = {
   banned: boolean;
   created_at: string;
   last_login_at: string;
+  /** Id paket ('free' atau paket berbayar) dan akhir masa aktifnya; lihat src/lib/plans.ts. */
+  plan?: string;
+  plan_expires_at?: string | null;
 };
 
 /** Bentuk akun yang boleh dikirim ke browser pemiliknya. */
@@ -48,8 +51,10 @@ export function userById(id: string): Promise<User | null> {
   return supabaseRpc<User | null>("auth_user", { p_id: id });
 }
 
-export function keyOwner(key: string): Promise<{ id: string; banned: boolean } | null> {
-  return supabaseRpc<{ id: string; banned: boolean } | null>("auth_key_user", { p_key: key });
+export type KeyOwner = { id: string; banned: boolean; plan?: string; plan_expires_at?: string | null; used_today?: number };
+
+export function keyOwner(key: string): Promise<KeyOwner | null> {
+  return supabaseRpc<KeyOwner | null>("auth_key_user", { p_key: key });
 }
 
 export function rotateKey(id: string): Promise<User | null> {
@@ -90,7 +95,7 @@ export async function otpCancel(email: string): Promise<void> {
   await supabaseRpc("auth_otp_cancel", { p_email: email });
 }
 
-export type AdminUsers = { total: number; users: { email: string; username: string; name: string; provider: string; banned: boolean; created_at: string; last_login_at: string; api_key: string }[] };
+export type AdminUsers = { total: number; users: { email: string; username: string; name: string; provider: string; banned: boolean; created_at: string; last_login_at: string; api_key: string; plan?: string; plan_expires_at?: string | null }[] };
 
 export function adminUsers(limit: number): Promise<AdminUsers> {
   return supabaseRpc<AdminUsers>("auth_admin_users", { p_limit: limit });

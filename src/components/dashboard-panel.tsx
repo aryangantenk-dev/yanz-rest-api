@@ -25,6 +25,9 @@ type Usage = {
   top: Top[];
 };
 
+/** Paket yang sedang berlaku untuk akun ini (dari /api/auth/usage). */
+type PlanInfo = { id: string; name: string; daily: number; perMinute: number; paid: boolean; expires_at: string | null };
+
 const LOGIN_HREF = "/login?next=/dashboard";
 /** Jeda pembaruan otomatis. Saat gagal, jedanya digandakan sampai paling lama POLL_MAX_MS. */
 const POLL_MS = 10_000;
@@ -229,6 +232,7 @@ function TopEndpoints({ top }: { top: Top[] }) {
 function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
   const [usage, setUsage] = useState<Usage | null>(null);
   const [limit, setLimit] = useState<number | null>(null);
+  const [plan, setPlan] = useState<PlanInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(true);
   const [at, setAt] = useState<string>("");
@@ -255,7 +259,7 @@ function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
     };
     try {
       const r = await fetch("/api/auth/usage", { cache: "no-store", credentials: "same-origin" });
-      const body = (await r.json().catch(() => ({}))) as { usage?: Usage; limit?: number; error?: string };
+      const body = (await r.json().catch(() => ({}))) as { usage?: Usage; limit?: number; plan?: PlanInfo; error?: string };
       if (!alive.current) return;
       if (r.status === 401) {
         // Sesi berakhir: muat ulang keadaan login supaya ajakan login yang tampil.
@@ -270,6 +274,7 @@ function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
       const time = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
       setUsage(body.usage);
       setLimit(body.limit ?? null);
+      setPlan(body.plan ?? null);
       setError(null);
       setStale(false);
       setAt(time);
@@ -428,6 +433,33 @@ function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
             ))}
           </dl>
 
+          {plan && (
+            <section aria-labelledby="dash-paket" className="border border-line bg-card p-4 sm:p-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <h2 id="dash-paket" className="font-mono text-lg font-bold">
+                    Paket {plan.name}
+                  </h2>
+                  <p className="mt-1 text-sm text-muted">
+                    {plan.paid && plan.expires_at ? `Aktif sampai ${new Date(plan.expires_at).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}. ` : ""}
+                    Kuota terisi lagi setiap pukul 00.00 WIB.
+                  </p>
+                </div>
+                <Link href="/paket" className="btn btn-secondary shrink-0">
+                  {plan.paid ? "Perpanjang paket" : "Lihat paket"}
+                  <ArrowIcon />
+                </Link>
+              </div>
+              <p className="tnum mt-4 text-sm">
+                <strong className="font-mono text-base font-semibold">{fmt(usage.today)}</strong> dari {fmt(plan.daily)} permintaan terpakai hari ini
+                {usage.today >= plan.daily ? ". Kuota hari ini habis." : `, sisa ${fmt(plan.daily - usage.today)}.`}
+              </p>
+              <div className="mt-2 h-2 bg-subtle" role="progressbar" aria-label="Kuota harian terpakai" aria-valuemin={0} aria-valuemax={plan.daily} aria-valuenow={Math.min(usage.today, plan.daily)}>
+                <span className={`block h-full ${usage.today >= plan.daily ? "bg-danger" : "bg-accent"}`} style={{ width: `${Math.min(100, (usage.today / Math.max(1, plan.daily)) * 100)}%` }} />
+              </div>
+            </section>
+          )}
+
           {usage.total === 0 ? (
             <section aria-labelledby="dash-kosong" className="border border-control bg-card p-5 sm:p-8">
               <h2 id="dash-kosong" className="font-mono text-xl font-bold">
@@ -477,7 +509,9 @@ function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
                     {limit !== null && (
                       <div className="flex flex-wrap items-baseline justify-between gap-x-4 border-t border-line py-2.5">
                         <dt className="text-muted">Batas permintaan</dt>
-                        <dd className="tnum font-medium">{fmt(limit)} per menit per IP</dd>
+                        <dd className="tnum font-medium">
+                          {fmt(limit)} per menit {plan?.paid ? "per akun" : "per IP"}
+                        </dd>
                       </div>
                     )}
                   </dl>

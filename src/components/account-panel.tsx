@@ -407,6 +407,9 @@ export function AccountPanel({ fallback }: { fallback: string }) {
             <ChartIcon />
             Lihat statistik
           </Link>
+          <Link href="/paket" className="btn btn-secondary">
+            Paket dan kuota
+          </Link>
         </div>
         <p className="mt-2 text-sm text-muted">Kolom API key di dokumentasi terisi otomatis selama kamu masuk.</p>
       </section>

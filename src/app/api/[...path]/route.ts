@@ -3,9 +3,10 @@ import { findEndpoint } from "@/lib/api/registry";
 import { HttpError } from "@/lib/api/types";
 import { SITE_CREATOR, getOrigin } from "@/lib/site";
 import { recordHit } from "@/lib/stats";
-import { APPEAL_URL, OWNER_WA, RATE_LIMIT, clientIp, guard } from "@/lib/guard";
+import { APPEAL_URL, OWNER_WA, RATE_LIMIT, clientIp, guard, ipBusy } from "@/lib/guard";
 import { KEY_REQUIRED } from "@/lib/auth/config";
-import { keyFromRequest, keyOwnerId, verifyKey, withKeyInHtml, withKeyInLinks } from "@/lib/auth/apikey";
+import { keyFromRequest, keyKnown, keyOwnerId, keyPaid, keyQuota, keyUse, verifyKey, withKeyInHtml, withKeyInLinks } from "@/lib/auth/apikey";
+import { formatNumber } from "@/lib/plans";
 import { recordUsage } from "@/lib/auth/usage";
 
 export const dynamic = "force-dynamic";
@@ -50,8 +51,23 @@ async function handle(req: Request, ctx: RouteCtx) {
   }
 
   const ip = clientIp(req);
-  const verdict = await guard(ip);
-  const rlHeaders = verdict.headers;
+  const origin = getOrigin(req);
+  const sp = new URL(req.url).searchParams;
+  const apiKey = keyFromRequest(req, sp);
+  sp.delete("apikey");
+  sp.delete("api_key");
+
+  // Akun paket berbayar dihitung per akun dengan batas paketnya; selain itu per IP.
+  // Paketnya dibaca dari cache. Key yang belum dikenal di instance ini baru diperiksa lebih awal
+  // bila IP-nya sudah mencapai batas: hanya saat itulah paketnya mengubah hasil, dan dengan begitu
+  // tebak-tebakan key tetap terkena batas per IP tanpa satu panggilan database per tebakan.
+  let paid = KEY_REQUIRED ? keyPaid(apiKey) : null;
+  if (KEY_REQUIRED && !paid && apiKey && !keyKnown(apiKey) && ipBusy(ip)) {
+    await verifyKey(apiKey);
+    paid = keyPaid(apiKey);
+  }
+  const verdict = await guard(ip, paid);
+  let rlHeaders = verdict.headers;
   if (verdict.kind === "banned") {
     return fail(
       403,
@@ -61,6 +77,12 @@ async function handle(req: Request, ctx: RouteCtx) {
     );
   }
   if (verdict.kind === "limited") {
+    if (paid) {
+      return fail(429, `Terlalu banyak permintaan: batas paket ${paid.name} adalah ${formatNumber(paid.limit)} per menit. Coba lagi dalam ${verdict.retryAfter} detik.`, rlHeaders, {
+        limit: paid.limit,
+        retry_after: verdict.retryAfter,
+      });
+    }
     return fail(
       429,
       `Terlalu banyak permintaan: batasnya ${RATE_LIMIT} per menit per IP. Coba lagi dalam ${verdict.retryAfter} detik. Pelanggaran berulang membuat IP diblokir.`,
@@ -69,12 +91,6 @@ async function handle(req: Request, ctx: RouteCtx) {
     );
   }
 
-  const origin = getOrigin(req);
-  const sp = new URL(req.url).searchParams;
-  // API key diperiksa setelah batas permintaan, supaya tebak-tebakan key ikut terkena batas itu.
-  const apiKey = keyFromRequest(req, sp);
-  sp.delete("apikey");
-  sp.delete("api_key");
   if (KEY_REQUIRED) {
     if (!apiKey) {
       return fail(
@@ -90,6 +106,20 @@ async function handle(req: Request, ctx: RouteCtx) {
     if (verdict !== "ok") {
       return fail(403, `API key tidak valid atau sudah diganti. Lihat API key kamu yang berlaku di ${origin}/akun.`, rlHeaders, { login: `${origin}/login` });
     }
+
+    // Kuota harian paket pemilik key. Terisi lagi pukul 00.00 WIB.
+    const quota = keyQuota(apiKey);
+    const quotaHeaders = (left: number) => ({ "x-plan": quota.plan.id, "x-quota-limit": String(quota.plan.daily), "x-quota-remaining": String(left), "x-quota-reset": String(quota.resetIn) });
+    if (quota.left <= 0) {
+      return fail(
+        429,
+        `Kuota harian paket ${quota.plan.name} (${formatNumber(quota.plan.daily)} permintaan) sudah habis. Kuota terisi lagi pukul 00.00 WIB. Butuh lebih banyak? Lihat pilihan paket di ${origin}/paket.`,
+        { ...rlHeaders, ...quotaHeaders(0), "retry-after": String(quota.resetIn) },
+        { plan: quota.plan.id, quota: quota.plan.daily, used: quota.used, retry_after: quota.resetIn, upgrade: `${origin}/paket` },
+      );
+    }
+    keyUse(apiKey);
+    rlHeaders = { ...rlHeaders, ...quotaHeaders(quota.left - 1) };
   }
 
   // Pemilik key, untuk statistik pemakaian di /dashboard. null bila API key tidak diwajibkan.

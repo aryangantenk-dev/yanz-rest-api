@@ -32,6 +32,11 @@ const SCHEMA_SQL = `
     reason text not null default '',
     created_at timestamp not null default now()
   );
+  create table if not exists blocked_endpoints (
+    path varchar(120) primary key,
+    reason text not null default '',
+    created_at timestamptz not null default now()
+  );
 `;
 
 function poolConfig(raw: string): PoolConfig {

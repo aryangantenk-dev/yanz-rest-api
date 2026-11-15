@@ -217,6 +217,16 @@ select {
 .btn-secondary:hover:not(:disabled) {
   background: var(--subtle);
 }
+/* Aksi yang tidak bisa dibatalkan (mis. mengganti API key). */
+.btn-danger {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.btn-danger:hover:not(:disabled) {
+  background: var(--danger);
+  color: var(--bg);
+}
 
 /* Tautan teks di dalam paragraf */
 .link {
@@ -439,6 +449,16 @@ details[open] > .faq-body {
 .json-null { color: #94a3b8; }
 
 /* ---------- Keyframes ---------- */
+/* Bagian "gagal" pada diagram dashboard: bergaris, supaya tidak dibedakan lewat warna saja. */
+.tick {
+  animation: tick 1.2s ease-out;
+}
+
+.bar-failed {
+  background-image: repeating-linear-gradient(135deg, var(--danger) 0 3px, transparent 3px 6px);
+  box-shadow: inset 0 0 0 1px var(--danger);
+}
+
 @keyframes enter {
   from { opacity: 0; transform: translateY(0.375rem); }
   to { opacity: 1; transform: none; }
@@ -449,6 +469,10 @@ details[open] > .faq-body {
 }
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+/* Angka dashboard yang baru saja berubah: disorot sebentar lalu kembali ke warna teks. */
+@keyframes tick {
+  from { color: var(--ok); }
 }
 
 /* ---------- Gerak dikurangi ---------- */
@@ -490,4 +514,17 @@ details[open] > .faq-body {
 }
 :root[data-theme="dark"] .only-dark {
   display: block;
+}
+
+/* ---------- Tampilan menurut status login ----------
+   Atribut data-signed pada <html> diisi skrip kecil di <head> sebelum halaman digambar
+   (lalu dijaga oleh auth-client), sehingga tombol "Masuk"/"Akun" tidak berkedip saat dimuat. */
+:root .only-signed {
+  display: none;
+}
+:root[data-signed="1"] .only-signed {
+  display: inline-flex;
+}
+:root[data-signed="1"] .only-guest {
+  display: none;
 }

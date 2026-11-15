@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { useApiKey, withKey } from "./auth-client";
 import { CopyButton, useOrigin } from "./client-utils";
 
-type Props = { fallback: string; path: string };
+type Props = { fallback: string; path: string; keyRequired?: boolean };
 
 export function buildSnippets(url: string) {
   return {
@@ -24,9 +25,39 @@ print_r($data["result"]);`,
   } as Record<string, string>;
 }
 
-export function CodeTabs({ fallback, path }: Props) {
+/** Contoh kode untuk mengunggah berkas lewat POST multipart. */
+export function buildUploadSnippets(url: string, field: string) {
+  return {
+    cURL: `curl -s -F "${field}=@foto.jpg" "${url}"`,
+    JavaScript: `import { readFile } from "node:fs/promises";
+
+const form = new FormData();
+form.append("${field}", new Blob([await readFile("foto.jpg")]), "foto.jpg");
+
+const res = await fetch("${url}", { method: "POST", body: form });
+const data = await res.json();
+
+console.log(data.result.url);`,
+    Python: `import requests
+
+with open("foto.jpg", "rb") as f:
+    res = requests.post("${url}", files={"${field}": f})
+print(res.json()["result"]["url"])`,
+    PHP: `<?php
+$ch = curl_init("${url}");
+curl_setopt($ch, CURLOPT_POST, true);
+curl_setopt($ch, CURLOPT_POSTFIELDS, ["${field}" => new CURLFile("foto.jpg")]);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+$data = json_decode(curl_exec($ch), true);
+
+echo $data["result"]["url"];`,
+  } as Record<string, string>;
+}
+
+export function CodeTabs({ fallback, path, keyRequired = false }: Props) {
   const origin = useOrigin(fallback);
-  const snippets = buildSnippets(`${origin}${path}`);
+  const { shown } = useApiKey(keyRequired);
+  const snippets = buildSnippets(withKey(`${origin}${path}`, shown));
   const tabs = Object.keys(snippets);
   const [tab, setTab] = useState(tabs[0]);
 

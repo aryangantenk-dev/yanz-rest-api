@@ -4,15 +4,19 @@ import { allMeta } from "@/lib/api/registry";
 import type { CategoryId } from "@/lib/api/types";
 import { SITE_NAME, SITE_URL } from "@/lib/site";
 import { RATE_LIMIT } from "@/lib/limits";
+import { FREE_PLAN, formatNumber } from "@/lib/plans";
+import { KEY_REQUIRED } from "@/lib/auth/config";
+import { ApiKeyField } from "./api-key-field";
 import { CategoryMenu } from "./category-menu";
 import { BaseUrlBox } from "./client-utils";
 import { DocsExplorer } from "./docs-explorer";
 
 const facts = [
   ["Metode", "GET"],
-  ["Autentikasi", "Tidak ada"],
+  ["Autentikasi", KEY_REQUIRED ? "API key" : "Tidak ada"],
   ["Format", "JSON / PNG"],
   ["Batas", `${RATE_LIMIT} / menit / IP`],
+  ...(KEY_REQUIRED ? [["Kuota gratis", `${formatNumber(FREE_PLAN.daily)} / hari / akun`] as const] : []),
 ] as const;
 
 export function DocsShell({ active }: { active?: CategoryId }) {
@@ -71,7 +75,7 @@ export function DocsShell({ active }: { active?: CategoryId }) {
             <div className="mt-6">
               <BaseUrlBox fallback={SITE_URL} />
             </div>
-            <dl className="mt-6 grid grid-cols-2 gap-x-6 gap-y-4 border-y border-line py-4 sm:grid-cols-4">
+            <dl className={`mt-6 grid grid-cols-2 gap-x-6 gap-y-4 border-y border-line py-4 ${facts.length > 4 ? "sm:grid-cols-3" : "sm:grid-cols-4"}`}>
               {facts.map(([k, v]) => (
                 <div key={k}>
                   <dt className="text-sm text-muted">{k}</dt>
@@ -79,10 +83,15 @@ export function DocsShell({ active }: { active?: CategoryId }) {
                 </div>
               ))}
             </dl>
+            {KEY_REQUIRED && (
+              <div className="mt-6">
+                <ApiKeyField />
+              </div>
+            )}
           </header>
 
           <div className="mt-6">
-            <DocsExplorer endpoints={list} categories={cats} fallback={SITE_URL} showGroupHeadings={!active} />
+            <DocsExplorer endpoints={list} categories={cats} fallback={SITE_URL} showGroupHeadings={!active} keyRequired={KEY_REQUIRED} />
           </div>
         </div>
       </div>

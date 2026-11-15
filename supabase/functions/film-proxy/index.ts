@@ -1,6 +1,6 @@
 // film-proxy (Supabase Edge Function)
-// Meneruskan GET /fetch?url=... ke API Sankanime, yang menolak IP server Vercel.
-// Antarmukanya sama dengan scripts/film-proxy/install.sh (header x-proxy-key).
+// Meneruskan GET /fetch?url=... ke API publik jkt48.com, yang menolak IP server Vercel.
+// Permintaan wajib membawa header x-proxy-key.
 // Pasang:  supabase functions deploy film-proxy --no-verify-jwt
 //          supabase secrets set FILM_PROXY_KEY=<kunci acak>
 // Lalu di hosting: SANKA_PROXY_URL=https://<ref>.supabase.co/functions/v1/film-proxy
@@ -8,7 +8,7 @@
 // Secret opsional FILM_PROXY_ALLOW: daftar host yang diizinkan, dipisah koma.
 
 const KEY = Deno.env.get("FILM_PROXY_KEY") ?? "";
-const ALLOW = (Deno.env.get("FILM_PROXY_ALLOW") ?? "sankavollerei.web.id,sankanime.web.id")
+const ALLOW = (Deno.env.get("FILM_PROXY_ALLOW") ?? "sankavollerei.web.id,sankanime.web.id,jkt48.com")
   .split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -58,6 +58,8 @@ Deno.serve(async (req) => {
     if (q.get("origin") === "1") headers["origin"] = referer.origin;
   }
   if (q.get("xhr") === "1") headers["x-requested-with"] = "XMLHttpRequest";
+  // jkt48.com: halamannya sendiri menyertakan X-Request-Id acak di tiap panggilan API.
+  if (q.get("rid") === "1") headers["x-request-id"] = crypto.randomUUID();
 
   try {
     let res: Response | null = null;

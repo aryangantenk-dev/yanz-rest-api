@@ -1,6 +1,6 @@
 import { desc, eq, sql } from "drizzle-orm";
 import { getDb, hasDatabase } from "./index";
-import { apiStats, bannedIps, shortLinks } from "./schema";
+import { apiStats, bannedIps, blockedEndpoints, shortLinks } from "./schema";
 
 /**
  * Penyimpanan untuk statistik pemakaian dan pemendek URL. Dua backend didukung:
@@ -28,34 +28,45 @@ export interface Store {
   listBans(): Promise<Ban[]>;
   banIp(ip: string, reason: string): Promise<void>;
   unbanIp(ip: string): Promise<void>;
+  /** Daftar endpoint yang dinonaktifkan admin. */
+  listBlocks(): Promise<ApiBlock[]>;
+  blockPath(path: string, reason: string): Promise<void>;
+  unblockPath(path: string): Promise<void>;
 }
 
 export type Ban = { ip: string; reason: string; created_at: string | null };
+/** `path` berisi "kategori/slug", atau "kategori/*" untuk satu kategori penuh. */
+export type ApiBlock = { path: string; reason: string; created_at: string | null };
 
 /* ---------- Supabase (PostgREST) ---------- */
 
 const supabaseUrl = (process.env.SUPABASE_URL || "").trim().replace(/\/+$/, "");
 const supabaseKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || "").trim();
 
-function supabaseStore(): Store {
-  async function rpc<T>(fn: string, args: Record<string, unknown> = {}): Promise<T> {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 8000);
-    try {
-      const res = await fetch(`${supabaseUrl}/rest/v1/rpc/${fn}`, {
-        method: "POST",
-        headers: { apikey: supabaseKey, authorization: `Bearer ${supabaseKey}`, "content-type": "application/json" },
-        body: JSON.stringify(args),
-        cache: "no-store",
-        signal: ctrl.signal,
-      });
-      if (!res.ok) throw new Error(`Supabase ${fn} gagal (${res.status})`);
-      const body = await res.text();
-      return (body ? JSON.parse(body) : null) as T;
-    } finally {
-      clearTimeout(timer);
-    }
+export const hasSupabase = !!(supabaseUrl && supabaseKey);
+
+/** Panggil fungsi Postgres lewat REST Supabase memakai service role. Melempar Error bila gagal. */
+export async function supabaseRpc<T>(fn: string, args: Record<string, unknown> = {}): Promise<T> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const res = await fetch(`${supabaseUrl}/rest/v1/rpc/${fn}`, {
+      method: "POST",
+      headers: { apikey: supabaseKey, authorization: `Bearer ${supabaseKey}`, "content-type": "application/json" },
+      body: JSON.stringify(args),
+      cache: "no-store",
+      signal: ctrl.signal,
+    });
+    if (!res.ok) throw new Error(`Supabase ${fn} gagal (${res.status})`);
+    const body = await res.text();
+    return (body ? JSON.parse(body) : null) as T;
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+function supabaseStore(): Store {
+  const rpc = supabaseRpc;
 
   async function table<T>(method: string, query: string, body?: unknown, prefer?: string): Promise<T> {
     const ctrl = new AbortController();
@@ -89,6 +100,13 @@ function supabaseStore(): Store {
     },
     async unbanIp(ip) {
       await table("DELETE", `banned_ips?ip=eq.${encodeURIComponent(ip)}`, undefined, "return=minimal");
+    },
+    listBlocks: async () => (await table<ApiBlock[] | null>("GET", "blocked_endpoints?select=path,reason,created_at&order=created_at.desc&limit=1000")) ?? [],
+    async blockPath(path, reason) {
+      await table("POST", "blocked_endpoints?on_conflict=path", { path, reason: reason.slice(0, 300), created_at: new Date().toISOString() }, "resolution=merge-duplicates,return=minimal");
+    },
+    async unblockPath(path) {
+      await table("DELETE", `blocked_endpoints?path=eq.${encodeURIComponent(path)}`, undefined, "return=minimal");
     },
     async ping() {
       await rpc("api_stats_summary");
@@ -128,6 +146,19 @@ function postgresStore(): Store {
     async unbanIp(ip) {
       await (await db()).delete(bannedIps).where(eq(bannedIps.ip, ip));
     },
+    async listBlocks() {
+      const rows = await (await db()).select().from(blockedEndpoints).orderBy(desc(blockedEndpoints.createdAt)).limit(1000);
+      return rows.map((r) => ({ path: r.path, reason: r.reason, created_at: r.createdAt?.toISOString() ?? null }));
+    },
+    async blockPath(path, reason) {
+      await (await db())
+        .insert(blockedEndpoints)
+        .values({ path, reason: reason.slice(0, 300) })
+        .onConflictDoUpdate({ target: blockedEndpoints.path, set: { reason: reason.slice(0, 300), createdAt: new Date() } });
+    },
+    async unblockPath(path) {
+      await (await db()).delete(blockedEndpoints).where(eq(blockedEndpoints.path, path));
+    },
     async ping() {
       await (await db()).execute(sql`select 1`);
     },
@@ -166,7 +197,7 @@ let store: Store | null | undefined;
 
 export function getStore(): Store | null {
   if (store === undefined) {
-    store = supabaseUrl && supabaseKey ? supabaseStore() : hasDatabase ? postgresStore() : null;
+    store = hasSupabase ? supabaseStore() : hasDatabase ? postgresStore() : null;
   }
   return store;
 }

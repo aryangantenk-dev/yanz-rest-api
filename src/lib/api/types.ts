@@ -12,7 +12,8 @@ export type CategoryId =
   | "search"
   | "downloader"
   | "games"
-  | "film";
+  | "film"
+  | "jkt48";
 
 export type Param = {
   name: string;
@@ -36,7 +37,20 @@ export type Endpoint = {
   description: string;
   params: Param[];
   kind: "json" | "image" | "video" | "html";
+  /**
+   * Endpoint ini juga menerima berkas lewat POST (multipart/form-data, nama field `field`).
+   * Endpoint lain hanya menerima GET. Playground menampilkan pemilih berkas untuknya.
+   */
+  upload?: Upload;
   handler: (ctx: Ctx) => Promise<unknown>;
+};
+
+export type Upload = {
+  field: string;
+  /** Nilai atribut `accept` untuk pemilih berkas. */
+  accept: string;
+  maxBytes: number;
+  description: string;
 };
 
 /** Metadata yang aman dikirim ke client (tanpa handler). */

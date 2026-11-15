@@ -156,10 +156,11 @@ async function handle(req: Request, ctx: RouteCtx) {
   // Pemilik key, untuk statistik pemakaian di /dashboard. null bila API key tidak diwajibkan.
   const ownerId = KEY_REQUIRED ? keyOwnerId(apiKey) : null;
 
+  const started = Date.now();
   try {
     const result = await endpoint.handler({ req, sp, origin });
     recordHit(key);
-    recordUsage(ownerId, key, !(result instanceof Response) || result.status < 400);
+    recordUsage(ownerId, key, result instanceof Response ? result.status : 200, Date.now() - started);
 
     if (result instanceof Response) {
       let res = result;
@@ -181,7 +182,7 @@ async function handle(req: Request, ctx: RouteCtx) {
       headers: { "content-type": "application/json; charset=utf-8", ...CORS, ...rlHeaders },
     });
   } catch (e) {
-    recordUsage(ownerId, key, false);
+    recordUsage(ownerId, key, e instanceof HttpError ? e.status : 500, Date.now() - started);
     if (e instanceof HttpError) return fail(e.status, e.message, rlHeaders);
     console.error(`[api/${key}]`, e);
     return fail(500, "Terjadi kesalahan internal pada server.", rlHeaders);

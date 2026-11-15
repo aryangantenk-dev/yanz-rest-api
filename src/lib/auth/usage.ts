@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import { supabaseRpc } from "@/db/store";
 
-/* Statistik pemakaian per akun untuk halaman /dashboard (tabel api_usage di supabase/schema.sql). */
+/* Statistik dan riwayat pemakaian per akun untuk halaman /dashboard dan /admin (tabel api_usage dan api_usage_log di supabase/schema.sql). */
 
 export type UsageDay = { day: string; hits: number; errors: number };
 export type UsageTop = { path: string; hits: number; errors: number };
@@ -25,17 +25,23 @@ export type Usage = {
   top: UsageTop[];
 };
 
+/** Satu baris riwayat: satu permintaan yang sudah diproses, dengan kode status dan lama prosesnya. */
+export type UsageHit = { at: string; path: string; status: number; ms: number };
+
 /** Banyaknya hari pada deret harian di dashboard. */
 export const USAGE_DAYS = 14;
+/** Banyaknya permintaan terakhir yang disimpan di riwayat tiap akun (sama dengan batas di auth_usage_record). */
+export const HISTORY_KEEP = 200;
 
 /**
- * Catat satu permintaan milik sebuah akun. Dijalankan setelah respons terkirim supaya
- * tidak memperlambat API; kegagalan mencatat tidak pernah mengganggu permintaannya.
+ * Catat satu permintaan milik sebuah akun: naikkan hitungan hariannya dan tambahkan ke riwayat.
+ * Dijalankan setelah respons terkirim supaya tidak memperlambat API; kegagalan mencatat tidak
+ * pernah mengganggu permintaannya. Status 400 ke atas dihitung sebagai gagal.
  */
-export function recordUsage(userId: string | null, path: string, ok: boolean) {
+export function recordUsage(userId: string | null, path: string, status: number, ms: number) {
   if (!userId) return;
   const task = () =>
-    supabaseRpc("auth_usage_hit", { p_id: userId, p_path: path, p_ok: ok }).catch(() => {
+    supabaseRpc("auth_usage_record", { p_id: userId, p_path: path, p_ok: status < 400, p_status: status, p_ms: Math.max(0, Math.round(ms)) }).catch(() => {
       /* diabaikan */
     });
   try {
@@ -50,9 +56,9 @@ const num = (v: unknown) => {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 };
 
-export async function usageSummary(userId: string): Promise<Usage> {
-  const raw = (await supabaseRpc<Record<string, unknown> | null>("auth_usage_summary", { p_id: userId, p_days: USAGE_DAYS })) ?? {};
-  const list = (v: unknown) => (Array.isArray(v) ? (v as Record<string, unknown>[]) : []);
+const list = (v: unknown) => (Array.isArray(v) ? (v as Record<string, unknown>[]) : []);
+
+function parseUsage(raw: Record<string, unknown>): Usage {
   return {
     today: num(raw.today),
     today_errors: num(raw.today_errors),
@@ -67,5 +73,38 @@ export async function usageSummary(userId: string): Promise<Usage> {
     endpoints: num(raw.endpoints),
     days: list(raw.days).map((d) => ({ day: String(d.day).slice(0, 10), hits: num(d.hits), errors: num(d.errors) })),
     top: list(raw.top).map((t) => ({ path: String(t.path), hits: num(t.hits), errors: num(t.errors) })),
+  };
+}
+
+function parseHistory(raw: unknown): UsageHit[] {
+  return list(raw)
+    .filter((h) => typeof h.at === "string" && typeof h.path === "string")
+    .map((h) => ({ at: String(h.at), path: String(h.path), status: num(h.status) || 200, ms: num(h.ms) }));
+}
+
+export async function usageSummary(userId: string): Promise<Usage> {
+  return parseUsage((await supabaseRpc<Record<string, unknown> | null>("auth_usage_summary", { p_id: userId, p_days: USAGE_DAYS })) ?? {});
+}
+
+/** Permintaan terakhir milik sebuah akun, dari yang paling baru. */
+export async function usageHistory(userId: string, limit = HISTORY_KEEP): Promise<UsageHit[]> {
+  return parseHistory(await supabaseRpc<unknown>("auth_usage_history", { p_id: userId, p_limit: limit }));
+}
+
+export type AdminUserUsage = {
+  user: { email: string; username: string; is_admin: boolean; plan: string; created_at: string | null };
+  usage: Usage;
+  history: UsageHit[];
+};
+
+/** Untuk owner dan admin (/api/admin/userusage): ringkasan dan riwayat pemakaian satu akun. null bila akunnya tidak ada. */
+export async function adminUserUsage(email: string, limit = HISTORY_KEEP): Promise<AdminUserUsage | null> {
+  const raw = await supabaseRpc<Record<string, unknown> | null>("auth_admin_usage", { p_email: email, p_days: USAGE_DAYS, p_limit: limit });
+  if (!raw || typeof raw !== "object") return null;
+  const u = (raw.user ?? {}) as Record<string, unknown>;
+  return {
+    user: { email: String(u.email ?? email), username: String(u.username ?? ""), is_admin: u.is_admin === true, plan: String(u.plan ?? "free"), created_at: typeof u.created_at === "string" ? u.created_at : null },
+    usage: parseUsage((raw.usage ?? {}) as Record<string, unknown>),
+    history: parseHistory(raw.history),
   };
 }

@@ -1048,3 +1048,94 @@ revoke all on function public.auth_set_api_block(text, boolean, timestamptz, tex
 grant execute on function public.auth_set_api_block(text, boolean, timestamptz, text) to service_role;
 revoke all on function public.auth_api_blocked(integer) from public, anon, authenticated;
 grant execute on function public.auth_api_blocked(integer) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Riwayat penggunaan API
+-- 200 permintaan terakhir tiap akun: waktu, endpoint, kode status, dan lama proses.
+-- Tampil di /dashboard (milik akun itu sendiri) dan di /admin (tombol "Riwayat API" di kartu akun,
+-- atau /api/admin/userusage). Hitungan harian tetap di api_usage; tabel ini hanya rincian terbaru.
+-- ---------------------------------------------------------------------------
+
+create table if not exists public.api_usage_log (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references public.api_users(id) on delete cascade,
+  at timestamptz not null default now(),
+  path varchar(120) not null,
+  status smallint not null default 200,
+  ms integer not null default 0
+);
+
+create index if not exists api_usage_log_user_idx on public.api_usage_log (user_id, id desc);
+
+alter table public.api_usage_log enable row level security;
+revoke all on table public.api_usage_log from anon, authenticated;
+grant all on table public.api_usage_log to service_role;
+
+-- Catat satu permintaan milik akun p_id: naikkan hitungan hariannya (auth_usage_hit) dan
+-- tambahkan satu baris riwayat berisi kode status dan lama prosesnya (milidetik).
+create or replace function public.auth_usage_record(p_id uuid, p_path text, p_ok boolean, p_status integer, p_ms integer)
+returns void
+language plpgsql
+set search_path = ''
+as $$
+begin
+  perform public.auth_usage_hit(p_id, p_path, p_ok);
+  begin
+    insert into public.api_usage_log (user_id, path, status, ms)
+    values (p_id, left(p_path, 120), greatest(100, least(coalesce(p_status, 200), 599)), greatest(0, least(coalesce(p_ms, 0), 3600000)));
+
+    -- Sesekali buang baris di luar 200 permintaan terakhir akun ini supaya tabel tidak terus membesar.
+    if random() < 0.05 then
+      delete from public.api_usage_log l
+      where l.user_id = p_id
+        and l.id < (select k.id from public.api_usage_log k where k.user_id = p_id order by k.id desc offset 199 limit 1);
+    end if;
+  exception
+    when foreign_key_violation then
+      null; -- akunnya sudah dihapus
+  end;
+end;
+$$;
+
+-- Permintaan terakhir milik akun p_id, dari yang paling baru (paling banyak 200).
+create or replace function public.auth_usage_history(p_id uuid, p_limit integer)
+returns json
+language sql
+stable
+set search_path = ''
+as $$
+  select coalesce(json_agg(json_build_object('at', t.at, 'path', t.path, 'status', t.status, 'ms', t.ms) order by t.id desc), '[]'::json)
+  from (
+    select l.id, l.at, l.path, l.status, l.ms
+    from public.api_usage_log l
+    where l.user_id = p_id
+    order by l.id desc
+    limit greatest(1, least(p_limit, 200))
+  ) t;
+$$;
+
+-- Untuk owner dan admin (/api/admin/userusage): ringkasan dan riwayat pemakaian satu akun.
+-- Mengembalikan null bila akunnya tidak ada.
+create or replace function public.auth_admin_usage(p_email text, p_days integer, p_limit integer)
+returns json
+language sql
+stable
+set search_path = ''
+as $$
+  select json_build_object(
+    'user', json_build_object(
+      'email', u.email, 'username', coalesce(u.username, ''), 'is_admin', u.is_admin, 'created_at', u.created_at,
+      'plan', case when u.plan <> 'free' and u.plan_expires_at > now() then u.plan else 'free' end
+    ),
+    'usage', public.auth_usage_summary(u.id, p_days),
+    'history', public.auth_usage_history(u.id, p_limit)
+  )
+  from public.api_users u where u.email = lower(p_email);
+$$;
+
+revoke all on function public.auth_usage_record(uuid, text, boolean, integer, integer) from public, anon, authenticated;
+revoke all on function public.auth_usage_history(uuid, integer) from public, anon, authenticated;
+revoke all on function public.auth_admin_usage(text, integer, integer) from public, anon, authenticated;
+grant execute on function public.auth_usage_record(uuid, text, boolean, integer, integer) to service_role;
+grant execute on function public.auth_usage_history(uuid, integer) to service_role;
+grant execute on function public.auth_admin_usage(text, integer, integer) to service_role;

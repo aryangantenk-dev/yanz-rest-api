@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useAuth } from "./auth-client";
 import { ArrowIcon, RefreshIcon } from "./icons";
+import { HistoryList, type HistoryRow } from "./usage-history";
 
 type PlanOption = { id: string; name: string; paid: boolean };
 type UserRow = {
@@ -24,6 +25,14 @@ type UserRow = {
   api_blocked?: boolean;
   api_blocked_until?: string | null;
   api_block_reason?: string;
+};
+type UsageDay = { day: string; hits: number; errors: number };
+type UsageTop = { path: string; hits: number; errors: number };
+/** Jawaban /api/admin/userusage: ringkasan dan riwayat pemakaian satu akun. */
+type UserUsageData = {
+  usage: { today: number; today_errors: number; week: number; week_errors: number; month: number; month_errors: number; total: number; total_errors: number; first_at: string | null; last_at: string | null; days: UsageDay[]; top: UsageTop[] };
+  history: HistoryRow[];
+  kept?: number;
 };
 type KeyBlockRow = { email: string; username: string; api_blocked_until: string | null; api_block_reason: string; api_blocked_at: string | null };
 type KeyBlocks = { total: number; users: KeyBlockRow[] };
@@ -121,6 +130,148 @@ function ConfirmButton({ label, confirmLabel, onConfirm, disabled, className = "
   );
 }
 
+/** Riwayat pemakaian API satu akun, dibuka dari kartu akunnya: ringkasan, endpoint terbanyak, per hari, dan permintaan terakhir. */
+function UserUsage({ email }: { email: string }) {
+  const [data, setData] = useState<UserUsageData | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(true);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    let off = false;
+    void (async () => {
+      const r = await call<UserUsageData>("userusage", { email });
+      if (off) return;
+      setBusy(false);
+      if (r.result) {
+        setData(r.result);
+        setError("");
+      } else setError(r.error || "Riwayat belum bisa dimuat.");
+    })();
+    return () => {
+      off = true;
+    };
+  }, [email, tick]);
+
+  const u = data?.usage;
+  const totals = u
+    ? [
+        { label: "Hari ini", hits: u.today, errors: u.today_errors },
+        { label: "7 hari", hits: u.week, errors: u.week_errors },
+        { label: "30 hari", hits: u.month, errors: u.month_errors },
+        { label: "Total", hits: u.total, errors: u.total_errors },
+      ]
+    : [];
+  const dayShort = (day: string) => new Date(`${day}T12:00:00Z`).toLocaleDateString("id-ID", { day: "numeric", month: "short", timeZone: "UTC" });
+
+  return (
+    <div className="mt-4 border-t border-line pt-4" aria-busy={busy || undefined}>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <h3 className="font-mono text-base font-bold">Riwayat penggunaan API</h3>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            setTick((n) => n + 1);
+          }}
+          className="btn btn-secondary"
+        >
+          {busy ? "Memuat…" : "Muat ulang"}
+        </button>
+      </div>
+      {error && (
+        <p className="mt-3 border border-danger p-3 font-medium text-danger" role="alert">
+          {error}
+        </p>
+      )}
+      {!data && !error && <div className="mt-3 h-40 animate-pulse bg-subtle" aria-hidden />}
+      {data && u && (
+        <>
+          <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {totals.map((t) => (
+              <div key={t.label} className="border border-line bg-bg p-3">
+                <dt className="text-sm text-muted">{t.label}</dt>
+                <dd className="tnum mt-1">
+                  <span className="block font-mono text-xl font-bold leading-tight">{fmt(t.hits)}</span>
+                  <span className="block text-sm text-muted">{t.errors > 0 ? `${fmt(t.errors)} gagal` : "Tidak ada yang gagal"}</span>
+                </dd>
+              </div>
+            ))}
+          </dl>
+          <p className="tnum mt-2 text-sm text-muted">
+            {u.first_at ? `Permintaan pertama ${moment(u.first_at)}, terakhir ${moment(u.last_at)}.` : "Akun ini belum pernah memakai API."}
+          </p>
+
+          {u.top.length > 0 && (
+            <div className="mt-4">
+              <h4 className="text-sm font-semibold">Endpoint terbanyak (30 hari)</h4>
+              <ol className="tnum mt-1">
+                {u.top.map((t) => (
+                  <li key={t.path} className="flex items-baseline justify-between gap-3 border-t border-line py-2 first:border-t-0">
+                    <span className="wrap-anywhere min-w-0 font-mono text-sm">/api/{t.path}</span>
+                    <span className="shrink-0 text-sm">
+                      <span className="font-mono font-semibold">{fmt(t.hits)}</span>
+                      {t.errors > 0 ? <span className="text-muted">, {fmt(t.errors)} gagal</span> : null}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+
+          {u.days.some((d) => d.hits > 0) && (
+            <details className="mt-3 border-t border-line">
+              <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium">Permintaan per hari ({u.days.length} hari terakhir)</summary>
+              <div className="overflow-x-auto pb-2">
+                <table className="tnum w-full min-w-[18rem] border-collapse text-sm">
+                  <caption className="sr-only">Permintaan per hari</caption>
+                  <thead>
+                    <tr className="border-b border-line text-left text-muted">
+                      <th scope="col" className="py-2 pr-3 font-medium">
+                        Tanggal
+                      </th>
+                      <th scope="col" className="py-2 pr-3 text-right font-medium">
+                        Permintaan
+                      </th>
+                      <th scope="col" className="py-2 text-right font-medium">
+                        Gagal
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...u.days].reverse().map((d) => (
+                      <tr key={d.day} className="border-b border-line last:border-b-0">
+                        <th scope="row" className="py-2 pr-3 text-left font-normal">
+                          {dayShort(d.day)}
+                        </th>
+                        <td className="py-2 pr-3 text-right font-mono">{fmt(d.hits)}</td>
+                        <td className="py-2 text-right font-mono">{fmt(d.errors)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          )}
+
+          <div className="mt-4">
+            <h4 className="text-sm font-semibold">Permintaan terakhir</h4>
+            {data.history.length === 0 ? (
+              <p className="mt-1 text-sm text-muted">Belum ada permintaan di riwayat akun ini.</p>
+            ) : (
+              <>
+                <p className="tnum mt-1 text-sm text-muted">Sampai {fmt(data.kept ?? 200)} permintaan terakhir tiap akun. Permintaan yang ditolak sebelum diproses tidak tercatat.</p>
+                <HistoryList rows={data.history} page={10} docsLinks={false} />
+              </>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function Frame({ children }: { children: React.ReactNode }) {
   return (
     <div>
@@ -170,6 +321,8 @@ export function AdminPanel({
   const [notice, setNotice] = useState<Notice | null>(null);
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
+  /** Email akun yang riwayat penggunaannya sedang dibuka di tab Akun. */
+  const [viewing, setViewing] = useState<string | null>(null);
   const [planPick, setPlanPick] = useState(plans.find((p) => p.paid)?.id ?? plans[0]?.id ?? "free");
   const [daysPick, setDaysPick] = useState(String(planDays));
   const [banIp, setBanIp] = useState("");
@@ -446,6 +599,9 @@ export function AdminPanel({
                         <button type="button" onClick={() => setEditing(open ? null : u.email)} aria-expanded={open} className="btn btn-secondary">
                           {open ? "Batal" : "Atur paket"}
                         </button>
+                        <button type="button" onClick={() => setViewing(viewing === u.email ? null : u.email)} aria-expanded={viewing === u.email} className="btn btn-secondary">
+                          {viewing === u.email ? "Tutup riwayat" : "Riwayat API"}
+                        </button>
                         {u.api_blocked ? (
                           <button type="button" disabled={!!busy} onClick={() => void run(`kb:${u.email}`, "keyunblock", { email: u.email }, `Blokir API ${u.email} dibuka.`)} className="btn btn-secondary">
                             {busy === `kb:${u.email}` ? "Membuka…" : "Buka blokir API"}
@@ -530,6 +686,8 @@ export function AdminPanel({
                           </p>
                         </form>
                       )}
+
+                      {viewing === u.email && <UserUsage email={u.email} />}
                     </li>
                   );
                 })}

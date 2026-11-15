@@ -7,6 +7,7 @@ import { ApiBlockNotice } from "./api-block-notice";
 import { Avatar } from "./avatar";
 import { CopyButton } from "./client-utils";
 import { ArrowIcon, RefreshIcon, UserIcon } from "./icons";
+import { HistoryList, type HistoryRow } from "./usage-history";
 
 type Day = { day: string; hits: number; errors: number };
 type Top = { path: string; hits: number; errors: number };
@@ -226,6 +227,64 @@ function TopEndpoints({ top }: { top: Top[] }) {
           );
         })}
       </ol>
+    </section>
+  );
+}
+
+/**
+ * Riwayat permintaan terakhir. Dimuat ulang setiap kali `version` berubah, yaitu saat ringkasan
+ * di atasnya menunjukkan ada permintaan baru; jadi pembaruan otomatis tidak memuatnya sia-sia.
+ */
+function History({ version }: { version: string }) {
+  const [rows, setRows] = useState<HistoryRow[] | null>(null);
+  const [kept, setKept] = useState(200);
+  const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
+
+  useEffect(() => {
+    let off = false;
+    void (async () => {
+      try {
+        const r = await fetch("/api/auth/history", { cache: "no-store", credentials: "same-origin" });
+        const body = (await r.json().catch(() => ({}))) as { history?: HistoryRow[]; kept?: number; error?: string };
+        if (off) return;
+        if (!r.ok || !Array.isArray(body.history)) {
+          setError(body.error ?? "Riwayat belum bisa dimuat.");
+          return;
+        }
+        setRows(body.history);
+        if (body.kept) setKept(body.kept);
+        setError("");
+      } catch {
+        if (!off) setError("Tidak dapat terhubung ke server. Periksa koneksimu, lalu coba lagi.");
+      }
+    })();
+    return () => {
+      off = true;
+    };
+  }, [version, retry]);
+
+  return (
+    <section aria-labelledby="dash-riwayat" className="border border-line bg-card p-4 sm:p-6">
+      <h2 id="dash-riwayat" className="font-mono text-lg font-bold">
+        Riwayat permintaan
+      </h2>
+      <p className="tnum mt-1 max-w-[70ch] text-sm text-muted">
+        Sampai {fmt(kept)} permintaan terakhir, dari yang paling baru. Permintaan yang ditolak sebelum diproses (kuota habis, batas per menit, API key diblokir) tidak tercatat.
+      </p>
+      <div className="mt-3">
+        {error && (
+          <div className="mb-3 flex flex-col gap-3 border border-danger p-3 sm:flex-row sm:items-center sm:justify-between" role="alert">
+            <p className="font-medium text-danger">{rows ? `${error} Daftar di bawah mungkin sudah tertinggal.` : error}</p>
+            <button type="button" onClick={() => setRetry((n) => n + 1)} className="btn btn-secondary shrink-0">
+              Coba lagi
+            </button>
+          </div>
+        )}
+        {!rows && !error && <div className="h-40 animate-pulse bg-subtle" aria-hidden />}
+        {rows && rows.length === 0 && <p className="text-muted">Belum ada riwayat. Permintaan berikutnya yang memakai API key kamu akan muncul di sini.</p>}
+        {rows && rows.length > 0 && <HistoryList rows={rows} />}
+      </div>
     </section>
   );
 }
@@ -539,6 +598,7 @@ function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
                   </dl>
                 </section>
               </div>
+              <History version={`${usage.total}|${usage.last_at ?? ""}`} />
             </>
           )}
 

@@ -53,6 +53,7 @@ Login aktif bila tiga hal ini terpenuhi: Supabase terpasang (`supabase/schema.sq
 - **Halaman `/akun`**: lihat, salin, dan ganti API key; ganti username; unggah atau hapus foto profil; keluar.
 - **Halaman `/dashboard`**: statistik API key milik akun yang sedang masuk. Isinya jumlah permintaan hari ini, 7 hari, 30 hari, dan total; diagram per hari (14 hari, dengan pilihan tampil sebagai tabel); endpoint yang paling sering dipakai; tingkat berhasil. Angkanya diperbarui otomatis tiap 10 detik selama tab terbuka dan terlihat (bisa dijeda lewat sakelar "Perbarui otomatis"), dan langsung menyusul saat tab dibuka lagi. Setelah masuk, pengguna diarahkan ke halaman ini. Pengunjung yang belum masuk melihat tulisan "Kamu belum login, login dahulu untuk mengecek statistik API key kamu." beserta tautan ke `/login`.
 - **Yang dihitung**: setiap permintaan ke `/api/...` yang membawa API key sah, dicatat per akun (bukan per key, jadi angkanya tetap setelah key diganti). Jawaban berkode 400 ke atas dihitung sebagai gagal. Permintaan yang ditolak sebelum key diperiksa (tanpa key, key salah, kena batas permintaan, IP diblokir) tidak dihitung. Hari dihitung menurut WIB. Rincian harian disimpan 90 hari; angka total tidak ikut terhapus. Datanya ada di tabel `api_usage` dan `api_usage_totals`.
+- **Riwayat permintaan**: `/dashboard` juga menampilkan 200 permintaan terakhir akun itu, dari yang paling baru: endpoint, waktu, lama proses, dan kode status, dengan saringan "Hanya yang gagal". Yang tercatat sama dengan yang dihitung di atas. Datanya ada di tabel `api_usage_log` (dibaca lewat `GET /api/auth/history` dengan sesi login); baris di luar 200 terakhir tiap akun dibuang otomatis. Admin bisa melihat riwayat akun mana pun lewat tombol **Riwayat API** di kartu akun pada halaman `/admin`, atau `/api/admin/userusage?email=…`.
 - **Dokumentasi**: kolom API key di `/docs` terisi otomatis selama pengguna masuk, dan ikut tertulis di URL serta contoh kode setiap endpoint.
 - Tautan di dalam respons yang menunjuk ke API ini sendiri (`cek`, `next`, proxy gambar komik, halaman player) otomatis membawa API key pemanggilnya.
 
@@ -72,6 +73,7 @@ Untuk owner (butuh `ADMIN_KEY`):
 
 ```
 /api/admin/users?key=ADMIN_KEY                    100 akun terbaru (API key disamarkan)
+/api/admin/userusage?email=..&key=ADMIN_KEY       riwayat penggunaan API satu akun (ringkasan, per hari, endpoint terbanyak, 200 permintaan terakhir)
 /api/admin/userban?email=a@b.com&key=ADMIN_KEY    nonaktifkan akun dan API key-nya
 /api/admin/userunban?email=a@b.com&key=ADMIN_KEY  aktifkan lagi
 ```

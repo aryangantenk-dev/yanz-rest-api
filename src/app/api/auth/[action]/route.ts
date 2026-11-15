@@ -7,7 +7,7 @@ import { sendOtpEmail } from "@/lib/auth/mail";
 import { sameSite } from "@/lib/auth/origin";
 import { clearSessionCookie, isSecure, otpHash, sessionCookie, sessionUserId } from "@/lib/auth/session";
 import { login, normalizeEmail, otpCancel, otpCheck, otpIssue, rotateKey, sessionBody, setPhoto, setUsername, userById, usernameTaken, type User } from "@/lib/auth/users";
-import { usageSummary } from "@/lib/auth/usage";
+import { HISTORY_KEEP, usageHistory, usageSummary } from "@/lib/auth/usage";
 import { clientIp } from "@/lib/guard";
 import { planView } from "@/lib/plans";
 import { AVATAR_DIR, MAX_AVATAR_BYTES, hasImageStore, removeImages, saveImage, sniffImage } from "@/lib/images";
@@ -56,6 +56,7 @@ const STORE_DOWN = "Server akun sedang tidak dapat dihubungi. Coba lagi sebentar
 export async function GET(req: Request, ctx: { params: Promise<{ action: string }> }) {
   const { action } = await ctx.params;
   if (action === "usage") return usage(req);
+  if (action === "history") return history(req);
   if (action !== "me") return fail(404, "Aksi tidak dikenal.");
   const base = { methods: { google: HAS_GOOGLE, email: HAS_EMAIL }, keyRequired: KEY_REQUIRED };
   const id = AUTH_ENABLED ? sessionUserId(req) : null;
@@ -81,6 +82,20 @@ async function usage(req: Request) {
     return json(200, { usage: await usageSummary(id), limit: plan.perMinute, plan });
   } catch (e) {
     console.error("[auth/usage]", e);
+    return fail(503, STORE_DOWN);
+  }
+}
+
+/** Riwayat permintaan terakhir milik akun yang sedang masuk (halaman /dashboard). */
+async function history(req: Request) {
+  const id = AUTH_ENABLED ? sessionUserId(req) : null;
+  if (!id) return fail(401, "Kamu belum login. Login dahulu untuk melihat riwayat API key kamu.");
+  try {
+    const user = await userById(id);
+    if (!user || user.banned) return fail(401, "Sesi berakhir. Masuk lagi untuk melihat riwayat.", {}, clearSessionCookie(isSecure(req)));
+    return json(200, { history: await usageHistory(id), kept: HISTORY_KEEP });
+  } catch (e) {
+    console.error("[auth/history]", e);
     return fail(503, STORE_DOWN);
   }
 }

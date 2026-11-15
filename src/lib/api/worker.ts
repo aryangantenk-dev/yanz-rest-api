@@ -19,6 +19,41 @@ const MAX_UPLOAD = 4 * 1024 * 1024;
 const MAX_UPLOAD_MB = MAX_UPLOAD / 1024 / 1024;
 
 const DOWN = "Server pengolah untuk fitur ini sedang tidak aktif. Coba lagi beberapa menit lagi.";
+/**
+ * Mesin worker yang dijeda (auto-pause) menjawab dengan halaman HTML dari gerbang, bukan JSON.
+ * Kunjungan pertama sebenarnya membangunkan mesinnya; jawaban berikutnya sudah normal, jadi
+ * permintaan diulang sekali setelah jeda singkat.
+ */
+const WAKE_RETRY_MS = 12_000;
+const WAKING = "Server pengolah sedang dinyalakan. Tunggu sebentar lalu kirim lagi.";
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Jawaban gerbang mesin (HTML), bukan dari worker yang sebenarnya. */
+const looksLikeGateway = (res: Response) => {
+  const type = (res.headers.get("content-type") || "").toLowerCase();
+  return type.includes("text/html");
+};
+
+/** Satu percobaan memanggil worker; `null` bila gerbangnya yang menjawab (mesin dijeda/bangun). */
+async function tryWorker(job: string, qs: string, body: Uint8Array | null, timeoutMs: number): Promise<Response | null> {
+  const base = workerBase();
+  const key = (process.env[ENV_KEY] || "").trim();
+  let res: Response;
+  try {
+    res = await fetch(`${base}/v1/${job}?${qs}`, {
+      method: "POST",
+      headers: { "x-worker-key": key, "content-type": "application/octet-stream" },
+      body: body ? (body as BodyInit) : undefined,
+      cache: "no-store",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch {
+    return null;
+  }
+  if (!res.ok && looksLikeGateway(res)) return null;
+  return res;
+}
 
 export function workerBase(): string {
   let raw = (process.env[ENV_URL] || "").trim();
@@ -35,6 +70,8 @@ export type WorkerHealth = {
   status: "not_configured" | "connected" | "auth_error" | "unreachable";
   version?: string;
   jobs?: number;
+  /** true bila jawabannya halaman gerbang: mesin worker sedang dijeda dan perlu dibangunkan. */
+  paused?: boolean;
 };
 
 /** Periksa sambungan dan kecocokan kunci dengan mesin worker tanpa membocorkan alamat atau kuncinya. */
@@ -48,7 +85,10 @@ export async function pingWorker(timeoutMs = 4000): Promise<WorkerHealth> {
       cache: "no-store",
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!res.ok) return { status: "unreachable" };
+    if (!res.ok) {
+      // Gerbang mesin menjawab HTML saat mesinnya dijeda; petunjuk ini dipakai pesan galat.
+      return { status: "unreachable", paused: looksLikeGateway(res) };
+    }
     const data = (await res.json().catch(() => null)) as { ok?: boolean; version?: string; jobs?: unknown[] } | null;
     if (!data?.ok) return { status: "unreachable" };
     // Dengan kunci yang cocok, /health menyertakan daftar `jobs`; tanpanya berarti WORKER_KEY berbeda.
@@ -72,25 +112,19 @@ async function callWorker(job: string, params: Params, body: Uint8Array | null, 
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "" && v !== false) qs.set(k, v === true ? "1" : String(v));
 
-  let res: Response;
-  try {
-    res = await fetch(`${base}/v1/${job}?${qs}`, {
-      method: "POST",
-      headers: { "x-worker-key": key, "content-type": "application/octet-stream" },
-      body: body ? (body as BodyInit) : undefined,
-      cache: "no-store",
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (e) {
-    if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) throw new HttpError(504, "Pengolahan terlalu lama. Coba berkas yang lebih kecil atau lebih pendek.");
-    throw new HttpError(503, DOWN);
+  let res = await tryWorker(job, qs.toString(), body, timeoutMs);
+  if (!res) {
+    // Kemungkinan mesinnya sedang bangun dari jeda: beri waktu sekali lagi.
+    await sleep(WAKE_RETRY_MS);
+    res = await tryWorker(job, qs.toString(), body, timeoutMs);
   }
+  if (!res) throw new HttpError(503, WAKING);
   if (res.ok) return res;
 
   const data = (await res.json().catch(() => null)) as { error?: unknown } | null;
   const msg = typeof data?.error === "string" && data.error.trim() ? data.error.trim().slice(0, 300) : "";
-  // Tanpa pesan JSON, jawabannya bukan dari worker (gerbang mesin, mesin dijeda, port ditutup).
-  if (!msg) throw new HttpError(503, DOWN);
+  // Tanpa pesan JSON, jawabannya bukan dari worker (gerbang mesin, port ditutup).
+  if (!msg) throw new HttpError(503, WAKING);
   if (res.status === 401) {
     console.error("[worker] kunci ditolak: WORKER_KEY di server ini berbeda dengan di mesin worker.");
     throw new HttpError(503, "Fitur ini sedang tidak bisa dipakai karena salah konfigurasi di server. Hubungi pemilik API.");

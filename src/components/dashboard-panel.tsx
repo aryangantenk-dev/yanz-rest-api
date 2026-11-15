@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { refreshAuth, useAuth, type AuthUser } from "./auth-client";
+import { ReferralCard } from "./rewards";
 import { ApiBlockNotice } from "./api-block-notice";
 import { Avatar } from "./avatar";
 import { CopyButton } from "./client-utils";
@@ -647,6 +648,8 @@ function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
           </section>
         </>
       )}
+
+      <ReferralCard />
     </div>
   );
 }

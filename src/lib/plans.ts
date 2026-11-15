@@ -51,6 +51,13 @@ export const LIMIT_STEP = 100;
 /** Pembelian terkecil; payment gateway tidak menerima pembayaran di bawah Rp1.000. */
 export const LIMIT_MIN = 1_000;
 export const LIMIT_MAX = 1_000_000;
+/**
+ * Referral: setiap pesanan lunas (paket atau limit) dari akun yang mendaftar lewat tautan
+ * referral memberi pengundangnya limit tambahan sebesar persentase ini dari nominal pesanan.
+ * Rp1 dihitung satu limit, jadi pembelian Rp30.000 memberi 3.000 limit bila nilainya 10.
+ */
+export const REFERRAL_PERCENT = 10;
+
 /** Pilihan cepat jumlah limit di halaman /paket. */
 export const LIMIT_CHOICES: readonly number[] = [1_000, 5_000, 10_000, 50_000];
 

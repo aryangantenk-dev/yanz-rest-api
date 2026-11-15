@@ -66,6 +66,12 @@ const themeScript = `try{var t=localStorage.getItem("theme");if(t==="light"||t==
 // Menandai browser yang terakhir kali dalam keadaan masuk, sebelum halaman digambar (lihat .only-signed di globals.css).
 const signedScript = AUTH_ENABLED ? `try{if(localStorage.getItem("yn_signed_in")==="1")document.documentElement.dataset.signed="1"}catch(e){}` : "";
 
+// Tautan referral (?ref=KODE): simpan kodenya 30 hari supaya masih ada saat pendaftar selesai masuk,
+// termasuk setelah berpindah ke Google dan kembali. Lihat src/lib/billing/referral.ts.
+const refScript = AUTH_ENABLED
+  ? `try{var r=new URLSearchParams(location.search).get("ref");if(r&&/^[0-9A-Za-z]{6,12}$/.test(r))document.cookie="yn_ref="+r.toUpperCase()+"; path=/; max-age=2592000; samesite=lax"+(location.protocol==="https:"?"; secure":"")}catch(e){}`
+  : "";
+
 export default function RootLayout({ children }: { children: ReactNode }) {
   const jsonLd = {
     "@context": "https://schema.org",
@@ -91,7 +97,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="id" className={`${body.variable} ${code.variable}`} suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript + signedScript }} />
+        <script dangerouslySetInnerHTML={{ __html: themeScript + signedScript + refScript }} />
       </head>
       <body className="flex min-h-dvh flex-col font-sans">
         <a href="#konten" className="btn btn-primary fixed left-4 top-2 z-[100] -translate-y-24 focus:translate-y-0">

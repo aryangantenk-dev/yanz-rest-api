@@ -9,7 +9,8 @@ import { clearSessionCookie, isSecure, otpHash, sessionCookie, sessionUserId } f
 import { login, normalizeEmail, otpCancel, otpCheck, otpIssue, rotateKey, sessionBody, setPhoto, setUsername, userById, usernameTaken, type User } from "@/lib/auth/users";
 import { HISTORY_KEEP, usageHistory, usageSummary } from "@/lib/auth/usage";
 import { clientIp } from "@/lib/guard";
-import { planView } from "@/lib/plans";
+import { REFERRAL_PERCENT, planView } from "@/lib/plans";
+import { attachReferral, clearRefCookie, referralSummary } from "@/lib/billing/referral";
 import { AVATAR_DIR, MAX_AVATAR_BYTES, hasImageStore, removeImages, saveImage, sniffImage } from "@/lib/images";
 import { USERNAME_TAKEN, cleanUsername, usernameProblem } from "@/lib/username";
 import { SITE_CREATOR, getOrigin } from "@/lib/site";
@@ -21,6 +22,7 @@ export const runtime = "nodejs";
  * Rute login untuk halaman /login dan /akun (bukan bagian dari API publik).
  *   GET  /api/auth/me          sesi saat ini beserta API key pemiliknya
  *   GET  /api/auth/usage       statistik pemakaian akun yang sedang masuk
+ *   GET  /api/auth/referral    tautan referral akun yang sedang masuk beserta hasilnya
  *   POST /api/auth/otp         { email, username? }        kirim kode 6 digit ke email
  *   POST /api/auth/verify      { email, code, username? }  tukar kode dengan sesi
  *   POST /api/auth/check       { username }     apakah username masih tersedia
@@ -57,6 +59,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ action: string 
   const { action } = await ctx.params;
   if (action === "usage") return usage(req);
   if (action === "history") return history(req);
+  if (action === "referral") return referral(req);
   if (action !== "me") return fail(404, "Aksi tidak dikenal.");
   const base = { methods: { google: HAS_GOOGLE, email: HAS_EMAIL }, keyRequired: KEY_REQUIRED };
   const id = AUTH_ENABLED ? sessionUserId(req) : null;
@@ -68,6 +71,20 @@ export async function GET(req: Request, ctx: { params: Promise<{ action: string 
   } catch (e) {
     console.error("[auth/me]", e);
     return fail(503, STORE_DOWN, base);
+  }
+}
+
+/** Tautan referral milik akun yang sedang masuk dan hasilnya sejauh ini (halaman /dashboard). */
+async function referral(req: Request) {
+  const id = AUTH_ENABLED ? sessionUserId(req) : null;
+  if (!id) return fail(401, "Masuk dulu untuk melihat tautan referral.");
+  try {
+    const sum = await referralSummary(id);
+    if (!sum) return fail(401, "Sesi berakhir. Masuk lagi untuk melihat tautan referral.", {}, clearSessionCookie(isSecure(req)));
+    return json(200, { referral: { ...sum, link: `${getOrigin(req)}/daftar?ref=${sum.code}`, percent: REFERRAL_PERCENT } });
+  } catch (e) {
+    console.error("[auth/referral]", e);
+    return fail(503, STORE_DOWN);
   }
 }
 
@@ -164,7 +181,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ action: string
         const set = await setUsername(user.id, wanted);
         if (set.status === "ok") user = set.user;
       }
-      return json(200, sessionBody(user), sessionCookie(user.id, secure));
+      const res = json(200, sessionBody(user), sessionCookie(user.id, secure));
+      // Pendaftar baru yang datang lewat tautan referral: catat pengundangnya, lalu buang cookie-nya.
+      if (await attachReferral(req, user.id)) res.headers.append("set-cookie", clearRefCookie(secure));
+      return res;
     }
 
     if (action === "check") {

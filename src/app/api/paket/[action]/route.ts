@@ -4,8 +4,10 @@ import { hit } from "@/lib/auth/limit";
 import { authOrigin, sameSite } from "@/lib/auth/origin";
 import { clearSessionCookie, isSecure, sessionUserId } from "@/lib/auth/session";
 import { keyOwner, userById, type User } from "@/lib/auth/users";
+import { cleanCode, redeemCode } from "@/lib/billing/codes";
 import { ORDER_ID_RE, newOrderId, orderAttach, orderClose, orderGet, orderOpen, orderPaid, orderSync, ordersOf, publicOrder, type Order } from "@/lib/billing/orders";
 import { FEE_ON_CUSTOMER, GATEWAY_READY, GatewayError, MAX_AMOUNT, MIN_AMOUNT, WEBHOOK_READY, createPayment, verifyWebhook } from "@/lib/billing/welper";
+import { clientIp } from "@/lib/guard";
 import { LIMIT_MAX, LIMIT_MIN, LIMIT_PLAN, LIMIT_PRICE, LIMIT_STEP, MAX_PLAN_DAYS, formatNumber, planById, planView } from "@/lib/plans";
 import { SITE_CREATOR, SITE_NAME } from "@/lib/site";
 
@@ -16,6 +18,7 @@ export const runtime = "nodejs";
  * Rute paket untuk halaman /paket (bukan bagian dari API publik).
  *   GET  /api/paket/me                 paket akun yang sedang masuk, pemakaian hari ini, riwayat pesanan
  *   GET  /api/paket/status?order=ID    status satu pesanan (ikut dicocokkan dengan payment gateway)
+ *   POST /api/paket/redeem             { code, confirm? }  tukarkan kode hadiah buatan admin
  *   POST /api/paket/checkout           { plan, days } untuk paket, atau { plan: "limit", qty } untuk limit tambahan;
  *                                      membuat tagihan QRIS, jawabannya memuat payment_url
  *   POST /api/paket/webhook            notifikasi dari payment gateway (bertanda tangan)
@@ -102,9 +105,52 @@ async function readJson(req: Request, max: number): Promise<{ raw: string; body:
   }
 }
 
+const dateLong = (iso: string) => new Date(iso).toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta", day: "numeric", month: "long", year: "numeric" });
+
+/** Tukarkan kode hadiah buatan admin: isinya paket, limit tambahan, atau keduanya. */
+async function redeem(req: Request) {
+  if (!sameSite(req)) return fail(403, "Permintaan ini hanya bisa dikirim dari halaman situs ini.");
+  if (!AUTH_ENABLED) return fail(503, "Login belum diaktifkan di server ini.");
+  try {
+    const user = await signedIn(req, "menukarkan kode");
+    if (user instanceof NextResponse) return user;
+    if (!user.username) return fail(403, "Isi username dulu di halaman Akun sebelum menukarkan kode.");
+
+    const { body } = await readJson(req, 500);
+    const code = cleanCode(body.code);
+    if (!code) return fail(400, "Kode tidak valid. Kode terdiri dari 4 sampai 32 huruf, angka, dan tanda hubung.", { field: "code" });
+    // Menebak-nebak kode dibatasi per akun dan per IP.
+    const wait = hit("redeem", user.id, 10, 10 * 60_000) || hit("redeem-ip", clientIp(req), 30, 10 * 60_000);
+    if (wait) return fail(429, `Terlalu banyak percobaan. Coba lagi dalam ${Math.ceil(wait / 60)} menit.`, { retry_after: wait });
+
+    const res = await redeemCode(user.id, code, body.confirm === true);
+    const name = (id: string) => planById(id)?.name ?? id;
+    if (res.status === "conflict") {
+      return fail(
+        409,
+        `Paket ${name(res.current)} kamu masih aktif${res.current_until ? ` sampai ${dateLong(res.current_until)}` : ""}. Kode ini berisi paket ${name(res.plan)} ${formatNumber(res.days)} hari; menukarkannya mengganti paketmu sekarang, dan sisa hari paket ${name(res.current)} hangus.`,
+        { field: "code", confirm: true, contains: { plan: res.plan, days: res.days, qty: res.qty } },
+      );
+    }
+    if (res.status !== "ok") {
+      if (res.status === "expired") return fail(410, "Kode ini sudah kedaluwarsa.", { field: "code" });
+      if (res.status === "used_up") return fail(410, "Kuota penukaran kode ini sudah habis.", { field: "code" });
+      if (res.status === "already") return fail(409, "Kamu sudah pernah menukarkan kode ini.", { field: "code" });
+      return fail(404, "Kode tidak ditemukan. Periksa lagi penulisannya.", { field: "code" });
+    }
+    const fresh = (await userById(user.id)) ?? user;
+    const got = [res.plan && res.days > 0 ? `paket ${name(res.plan)} ${formatNumber(res.days)} hari` : "", res.qty > 0 ? `${formatNumber(res.qty)} limit tambahan` : ""].filter(Boolean).join(" dan ");
+    return json(200, { redeemed: { code, plan: res.plan, days: res.days, qty: res.qty }, message: `Kode berhasil ditukar: ${got}.`, plan: planInfo(fresh) });
+  } catch (e) {
+    console.error("[paket/redeem]", e);
+    return fail(503, STORE_DOWN);
+  }
+}
+
 export async function POST(req: Request, ctx: { params: Promise<{ action: string }> }) {
   const { action } = await ctx.params;
   if (action === "webhook") return webhook(req);
+  if (action === "redeem") return redeem(req);
   if (action !== "checkout") return fail(404, "Aksi tidak dikenal.");
   if (!sameSite(req)) return fail(403, "Permintaan ini hanya bisa dikirim dari halaman situs ini.");
   if (!AUTH_ENABLED) return fail(503, "Login belum diaktifkan di server ini.");

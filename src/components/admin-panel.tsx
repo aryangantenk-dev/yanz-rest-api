@@ -5,6 +5,8 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useAuth } from "./auth-client";
 import { ArrowIcon, RefreshIcon } from "./icons";
 import { HistoryList, type HistoryRow } from "./usage-history";
+import { AdminCodes } from "./admin-codes";
+import { Badge, ConfirmButton, call } from "./admin-shared";
 
 type PlanOption = { id: string; name: string; paid: boolean };
 type UserRow = {
@@ -50,7 +52,7 @@ type ApiBlockRow = { path: string; reason: string; created_at: string | null; sc
 type ApiBlocks = { total: number; blocks: ApiBlockRow[] };
 type Payment = { plan_days: number; limit_price?: number; limit_step?: number; api_key_set: boolean; webhook_secret_set: boolean; fee_bearer: string; gateway_reachable: boolean; webhook_url: string };
 type Notice = { tone: "ok" | "danger"; text: string };
-type Tab = "akun" | "pesanan" | "blokir" | "kunci" | "api" | "pembayaran";
+type Tab = "akun" | "pesanan" | "kode" | "blokir" | "kunci" | "api" | "pembayaran";
 
 /** Pilihan lama blokir API; nilainya dikirim apa adanya sebagai parameter `duration`. */
 const DURATIONS: { v: string; label: string }[] = [
@@ -70,11 +72,11 @@ const UNITS: { v: "m" | "h" | "d"; label: string; minutes: number }[] = [
 ];
 const MAX_BLOCK_MINUTES = 3650 * 1440;
 
-const OFFLINE = "Tidak dapat terhubung ke server. Periksa koneksimu, lalu coba lagi.";
 const STATUS_LABEL: Record<string, string> = { pending: "Menunggu pembayaran", paid: "Lunas", expired: "Kedaluwarsa", canceled: "Dibatalkan", failed: "Gagal dibuat" };
 const TABS: { id: Tab; label: string }[] = [
   { id: "akun", label: "Akun" },
   { id: "pesanan", label: "Pesanan" },
+  { id: "kode", label: "Kode" },
   { id: "blokir", label: "Blokir IP" },
   { id: "kunci", label: "Blokir API" },
   { id: "api", label: "Blokir endpoint" },
@@ -86,51 +88,6 @@ const fmt = (n: number | undefined | null) => nf.format(Number(n) || 0);
 const rupiah = (n: number | undefined | null) => `Rp${fmt(n)}`;
 const moment = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleString("id-ID", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "-");
 const dateLong = (iso: string) => new Date(iso).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" });
-
-type Answer<T> = { ok: boolean; status: number; result: T | null; error: string };
-
-/** Panggil /api/admin/<aksi> dengan sesi login. Header penanda wajib ada; lihat catatan di rute itu. */
-async function call<T>(action: string, params: Record<string, string> = {}): Promise<Answer<T>> {
-  try {
-    const qs = new URLSearchParams(params).toString();
-    const r = await fetch(`/api/admin/${action}${qs ? `?${qs}` : ""}`, { cache: "no-store", credentials: "same-origin", headers: { "x-requested-with": "yanz-admin" } });
-    const body = (await r.json().catch(() => ({}))) as { result?: T; error?: string };
-    return { ok: r.ok, status: r.status, result: r.ok ? (body.result ?? null) : null, error: body.error || (r.ok ? "" : `Server menjawab ${r.status}.`) };
-  } catch {
-    return { ok: false, status: 0, result: null, error: OFFLINE };
-  }
-}
-
-function Badge({ children, tone = "plain" }: { children: React.ReactNode; tone?: "plain" | "ok" | "danger" }) {
-  const cls = tone === "ok" ? "border-[var(--accent-edge)] text-fg" : tone === "danger" ? "border-danger text-danger" : "border-control text-muted";
-  return <span className={`inline-flex items-center border px-1.5 py-0.5 font-mono text-xs font-semibold ${cls}`}>{children}</span>;
-}
-
-/** Tombol untuk aksi yang berdampak besar: klik pertama meminta kepastian, klik kedua menjalankan. */
-function ConfirmButton({ label, confirmLabel, onConfirm, disabled, className = "btn btn-danger" }: { label: string; confirmLabel: string; onConfirm: () => void; disabled?: boolean; className?: string }) {
-  const [armed, setArmed] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      className={className}
-      onClick={() => {
-        if (timer.current) clearTimeout(timer.current);
-        if (armed) {
-          setArmed(false);
-          onConfirm();
-          return;
-        }
-        setArmed(true);
-        timer.current = setTimeout(() => setArmed(false), 5_000);
-      }}
-    >
-      {armed ? confirmLabel : label}
-    </button>
-  );
-}
 
 /** Riwayat pemakaian API satu akun, dibuka dari kartu akunnya: ringkasan, endpoint terbanyak, per hari, dan permintaan terakhir. */
 function UserUsage({ email }: { email: string }) {
@@ -781,6 +738,8 @@ export function AdminPanel({
               )}
             </section>
           )}
+
+          {tab === "kode" && <AdminCodes plans={plans} />}
 
           {tab === "blokir" && (
             <section className="space-y-4">

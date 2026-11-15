@@ -3,6 +3,7 @@ import { OAUTH_COOKIE, googleProfile, type OAuthState } from "@/lib/auth/google"
 import { authOrigin, googleRedirectUri } from "@/lib/auth/origin";
 import { cookie, isSecure, readCookie, safeNext, sessionCookie, unseal } from "@/lib/auth/session";
 import { login, normalizeEmail } from "@/lib/auth/users";
+import { attachReferral, clearRefCookie } from "@/lib/billing/referral";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -14,10 +15,11 @@ export async function GET(req: Request) {
   const sp = new URL(req.url).searchParams;
   const saved = unseal<OAuthState>("oauth", readCookie(req, OAUTH_COOKIE));
 
-  const go = (path: string, session?: string) => {
+  const go = (path: string, session?: string, dropRef = false) => {
     const headers = new Headers({ location: `${home}${path}`, "cache-control": "no-store" });
     headers.append("set-cookie", cookie(OAUTH_COOKIE, "", 0, secure));
     if (session) headers.append("set-cookie", session);
+    if (dropRef) headers.append("set-cookie", clearRefCookie(secure));
     return new Response(null, { status: 302, headers });
   };
   const back = (error: string) => go(`/login?error=${error}${saved?.next ? `&next=${encodeURIComponent(safeNext(saved.next))}` : ""}`);
@@ -36,7 +38,9 @@ export async function GET(req: Request) {
     const dest = safeNext(saved.next);
     // Username wajib: akun yang belum punya diarahkan mengisinya dulu di /akun, lalu lanjut ke tujuan semula.
     const first = user.username || dest === "/akun" ? dest : `/akun?next=${encodeURIComponent(dest)}`;
-    return go(first, sessionCookie(user.id, secure));
+    // Pendaftar baru yang datang lewat tautan referral: catat pengundangnya, lalu buang cookie-nya.
+    const hadRef = await attachReferral(req, user.id);
+    return go(first, sessionCookie(user.id, secure), hadRef);
   } catch (e) {
     console.error("[auth/google]", e instanceof Error ? e.message : e);
     return back("google_failed");

@@ -135,6 +135,37 @@ Pesanan disimpan di tabel `api_orders`. Untuk owner (butuh `ADMIN_KEY`):
 /api/admin/addlimit?email=a@b.com&amount=1000&key=…         tambah limit tambahan tanpa pembayaran (angka negatif mengurangi)
 ```
 
+### Kode hadiah
+
+Admin bisa membuat kode yang ditukar pengguna di halaman `/paket` ("Punya kode?"). Sebuah kode berisi paket (jenis paket dan jumlah hari), limit tambahan, atau keduanya. Kode dibuat dari tab **Kode** di `/admin`, atau lewat URL:
+
+```
+/api/admin/codes?key=ADMIN_KEY                                        daftar kode, jumlah penukaran, dan lima penukar terakhir
+/api/admin/codecreate?plan=pro&days=7&key=…                           kode acak (YANZ-XXXX-XXXX) berisi Pro 7 hari, tanpa batas
+/api/admin/codecreate?limit=1000&max=50&expires=7d&code=MERDEKA&key=… kode MERDEKA berisi 1.000 limit, untuk 50 akun, berlaku 7 hari
+/api/admin/codedelete?code=MERDEKA&key=…                              hapus kode (yang sudah ditukar tidak ditarik lagi)
+```
+
+| Parameter | Arti |
+| --- | --- |
+| `plan`, `days` | Paket yang diberikan dan lamanya (1 sampai 3650 hari). Kosongkan bila kode hanya berisi limit. |
+| `limit` | Limit tambahan yang diberikan (sampai 10.000.000). |
+| `max` | Kuota penukaran: berapa akun yang boleh menukar. Kosong berarti tidak terbatas. |
+| `expires` | Masa berlaku kode: lama waktu (`30m`, `12h`, `7d`) atau waktu ISO. Kosong berarti tidak kedaluwarsa. |
+| `code` | Teks kodenya, 4 sampai 32 huruf, angka, dan tanda hubung. Kosong berarti dibuat acak. |
+| `note` | Catatan untuk admin, tidak terlihat oleh penukar. |
+
+Aturannya: satu akun hanya bisa menukar satu kode satu kali. Paket yang sama dengan paket aktif menambah masa aktifnya. Bila akun masih punya paket berbayar lain, pengguna diminta setuju dulu karena paket lamanya diganti dan sisa harinya hangus. Penukaran dibatasi 10 percobaan per 10 menit per akun. Datanya ada di tabel `api_codes` dan `api_code_uses`.
+
+### Referral
+
+Setiap akun punya tautan referral `https://situs/daftar?ref=KODE`, terlihat di `/dashboard` ("Undang teman"). Orang yang membuka tautan itu lalu mendaftar tercatat sebagai undangan pemilik tautan. Setiap kali akun undangan itu melunasi pesanan (paket atau limit), pengundangnya mendapat limit tambahan sebesar `REFERRAL_PERCENT` persen dari nominal pesanan, dengan Rp1 dihitung sebagai 1 limit. Dengan nilai bawaan 10, pembelian Rp30.000 memberi 3.000 limit.
+
+- Besarnya diatur lewat `REFERRAL_PERCENT` di `src/lib/plans.ts`; 0 mematikan hadiahnya.
+- Kode dari tautan disimpan 30 hari di cookie `yn_ref` dan hanya dipakai untuk akun yang baru dibuat (kurang dari satu jam). Akun lama tidak bisa dijadikan undangan, dan orang tidak bisa mengundang dirinya sendiri.
+- Hadiah hanya untuk pesanan yang dibayar lewat payment gateway. Paket dari admin (`setplan`, `addlimit`) dan dari kode hadiah tidak menghasilkan hadiah referral.
+- Satu pesanan hanya menghasilkan satu hadiah (tabel `api_referral_rewards`).
+
 ## Batas pemakaian dan blokir IP
 
 - Setiap IP boleh mengirim **45 permintaan per menit** ke `/api/*`. Sisa kuota ada di header `x-ratelimit-remaining`.

@@ -1376,3 +1376,279 @@ as $$
     )
   );
 $$;
+
+-- ---------------------------------------------------------------------------
+-- Kode hadiah dan referral.
+-- Kode hadiah dibuat admin: berisi paket (plan + days), limit tambahan (qty), atau keduanya.
+-- max_uses null berarti boleh ditukar tanpa batas; expires_at null berarti tidak kedaluwarsa.
+-- Satu akun hanya bisa menukar satu kode sekali (api_code_uses).
+-- Referral: tiap akun punya ref_code. Akun baru yang mendaftar lewat tautan referral mencatat
+-- pengundangnya di referred_by; setiap pesanan lunas akun itu memberi pengundangnya limit
+-- tambahan sebesar persentase dari nominal pesanan (api_referral_rewards, sekali per pesanan).
+-- ---------------------------------------------------------------------------
+
+create table if not exists public.api_codes (
+  code text primary key,
+  plan text not null default '',
+  days integer not null default 0,
+  qty integer not null default 0,
+  max_uses integer,
+  used integer not null default 0,
+  expires_at timestamptz,
+  note text not null default '',
+  created_at timestamptz not null default now(),
+  constraint api_codes_content_check check ((plan <> '' and days > 0) or qty > 0)
+);
+
+create table if not exists public.api_code_uses (
+  code text not null references public.api_codes(code) on delete cascade,
+  user_id uuid not null references public.api_users(id) on delete cascade,
+  used_at timestamptz not null default now(),
+  primary key (code, user_id)
+);
+
+create index if not exists api_code_uses_user_idx on public.api_code_uses (user_id);
+
+alter table public.api_codes enable row level security;
+alter table public.api_code_uses enable row level security;
+revoke all on table public.api_codes from anon, authenticated;
+revoke all on table public.api_code_uses from anon, authenticated;
+grant all on table public.api_codes to service_role;
+grant all on table public.api_code_uses to service_role;
+
+-- Buat kode baru. status: 'ok' (beserta code) atau 'exists' (kode itu sudah ada).
+create or replace function public.code_create(p_code text, p_plan text, p_days integer, p_qty integer, p_max integer, p_expires timestamptz, p_note text)
+returns json
+language plpgsql
+set search_path = ''
+as $$
+declare
+  c public.api_codes;
+begin
+  insert into public.api_codes (code, plan, days, qty, max_uses, expires_at, note)
+  values (upper(p_code), coalesce(p_plan, ''), greatest(0, coalesce(p_days, 0)), greatest(0, coalesce(p_qty, 0)),
+          case when p_max is null or p_max <= 0 then null else p_max end, p_expires, left(coalesce(p_note, ''), 120))
+  on conflict (code) do nothing
+  returning * into c;
+  if not found then
+    return json_build_object('status', 'exists');
+  end if;
+  return json_build_object('status', 'ok', 'code', row_to_json(c));
+end;
+$$;
+
+-- Untuk admin: semua kode, terbaru dulu, beserta lima penukar terakhirnya.
+create or replace function public.code_list(p_limit integer)
+returns json
+language sql
+stable
+set search_path = ''
+as $$
+  select coalesce(json_agg(t), '[]'::json) from (
+    select c.code, c.plan, c.days, c.qty, c.max_uses, c.used, c.expires_at, c.note, c.created_at,
+           (select coalesce(json_agg(x), '[]'::json) from (
+              select coalesce(nullif(u.username, ''), u.email) as who, s.used_at
+              from public.api_code_uses s join public.api_users u on u.id = s.user_id
+              where s.code = c.code order by s.used_at desc limit 5
+            ) x) as recent
+    from public.api_codes c
+    order by c.created_at desc limit greatest(1, least(p_limit, 500))
+  ) t;
+$$;
+
+create or replace function public.code_delete(p_code text)
+returns boolean
+language plpgsql
+set search_path = ''
+as $$
+begin
+  delete from public.api_codes where code = upper(p_code);
+  return found;
+end;
+$$;
+
+-- Tukarkan kode untuk sebuah akun, dalam satu transaksi.
+-- status: 'ok', 'none' (kode tidak ada), 'expired', 'used_up' (kuota penukaran habis),
+-- 'already' (akun ini sudah pernah menukarnya), atau 'conflict' (akun punya paket berbayar lain
+-- yang masih aktif dan p_force belum true; tidak ada yang diubah).
+-- Paket yang sama menambah masa aktif; paket lain menggantikannya mulai sekarang.
+create or replace function public.code_redeem(p_user uuid, p_code text, p_force boolean)
+returns json
+language plpgsql
+set search_path = ''
+as $$
+declare
+  c public.api_codes;
+  u public.api_users;
+  v_active boolean;
+  base timestamptz;
+begin
+  select * into c from public.api_codes where code = upper(p_code) for update;
+  if not found then
+    return json_build_object('status', 'none');
+  end if;
+  if c.expires_at is not null and c.expires_at <= now() then
+    return json_build_object('status', 'expired');
+  end if;
+  if c.max_uses is not null and c.used >= c.max_uses then
+    return json_build_object('status', 'used_up');
+  end if;
+  if exists (select 1 from public.api_code_uses s where s.code = c.code and s.user_id = p_user) then
+    return json_build_object('status', 'already');
+  end if;
+
+  select * into u from public.api_users where id = p_user for update;
+  if not found then
+    return json_build_object('status', 'none');
+  end if;
+
+  if c.plan <> '' and c.days > 0 then
+    v_active := u.plan <> 'free' and u.plan_expires_at > now();
+    if v_active and u.plan <> c.plan and not coalesce(p_force, false) then
+      return json_build_object('status', 'conflict', 'plan', c.plan, 'days', c.days, 'qty', c.qty, 'current', u.plan, 'current_until', u.plan_expires_at);
+    end if;
+    base := case when v_active and u.plan = c.plan then u.plan_expires_at else now() end;
+    update public.api_users set plan = c.plan, plan_expires_at = base + make_interval(days => c.days) where id = u.id;
+  end if;
+  if c.qty > 0 then
+    update public.api_users set extra_limit = least(2000000000::bigint, extra_limit::bigint + c.qty)::integer where id = u.id;
+  end if;
+
+  insert into public.api_code_uses (code, user_id) values (c.code, p_user);
+  update public.api_codes set used = used + 1 where code = c.code;
+
+  select * into u from public.api_users where id = p_user;
+  return json_build_object('status', 'ok', 'plan', c.plan, 'days', c.days, 'qty', c.qty,
+                           'user_plan', u.plan, 'plan_expires_at', u.plan_expires_at, 'extra_limit', u.extra_limit);
+end;
+$$;
+
+revoke all on function public.code_create(text, text, integer, integer, integer, timestamptz, text) from public, anon, authenticated;
+revoke all on function public.code_list(integer) from public, anon, authenticated;
+revoke all on function public.code_delete(text) from public, anon, authenticated;
+revoke all on function public.code_redeem(uuid, text, boolean) from public, anon, authenticated;
+grant execute on function public.code_create(text, text, integer, integer, integer, timestamptz, text) to service_role;
+grant execute on function public.code_list(integer) to service_role;
+grant execute on function public.code_delete(text) to service_role;
+grant execute on function public.code_redeem(uuid, text, boolean) to service_role;
+
+-- Referral.
+alter table public.api_users add column if not exists ref_code text;
+alter table public.api_users add column if not exists referred_by uuid references public.api_users(id) on delete set null;
+alter table public.api_users add column if not exists referred_at timestamptz;
+alter table public.api_users add column if not exists ref_earned integer not null default 0;
+
+update public.api_users set ref_code = upper(substr(md5(gen_random_uuid()::text), 1, 8)) where ref_code is null;
+alter table public.api_users alter column ref_code set default upper(substr(md5(gen_random_uuid()::text), 1, 8));
+
+create unique index if not exists api_users_ref_code_key on public.api_users (ref_code);
+create index if not exists api_users_referred_by_idx on public.api_users (referred_by);
+
+-- Satu baris per pesanan lunas yang memberi hadiah; order_id unik supaya hadiah tidak dobel.
+create table if not exists public.api_referral_rewards (
+  order_id text primary key references public.api_orders(id) on delete cascade,
+  referrer uuid not null references public.api_users(id) on delete cascade,
+  buyer uuid references public.api_users(id) on delete set null,
+  amount integer not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists api_referral_rewards_referrer_idx on public.api_referral_rewards (referrer, created_at desc);
+
+alter table public.api_referral_rewards enable row level security;
+revoke all on table public.api_referral_rewards from anon, authenticated;
+grant all on table public.api_referral_rewards to service_role;
+
+-- Catat pengundang sebuah akun baru. Hanya sekali, hanya untuk akun yang dibuat kurang dari
+-- satu jam lalu (pendaftar baru), tidak boleh diri sendiri, dan tidak boleh saling mengundang.
+create or replace function public.ref_attach(p_user uuid, p_code text)
+returns boolean
+language plpgsql
+set search_path = ''
+as $$
+begin
+  update public.api_users u
+  set referred_by = r.id, referred_at = now()
+  from public.api_users r
+  where u.id = p_user and u.referred_by is null and u.created_at > now() - interval '1 hour'
+    and r.ref_code = upper(p_code) and r.id <> u.id and not r.banned
+    and r.referred_by is distinct from u.id;
+  return found;
+end;
+$$;
+
+-- Beri hadiah referral untuk satu pesanan lunas: p_percent persen dari nominal pesanan, dalam
+-- limit tambahan, untuk pengundang pembelinya. Aman dipanggil berkali-kali.
+-- status: 'ok' (beserta amount), 'already', atau 'none' (tidak ada yang perlu diberi).
+create or replace function public.ref_reward(p_order text, p_percent integer)
+returns json
+language plpgsql
+set search_path = ''
+as $$
+declare
+  o public.api_orders;
+  v_ref uuid;
+  v_amount integer;
+begin
+  select * into o from public.api_orders where id = p_order;
+  if not found or o.status <> 'paid' or o.user_id is null then
+    return json_build_object('status', 'none');
+  end if;
+  select u.referred_by into v_ref from public.api_users u where u.id = o.user_id;
+  if v_ref is null then
+    return json_build_object('status', 'none');
+  end if;
+  v_amount := floor(o.amount::numeric * greatest(0, least(coalesce(p_percent, 0), 100)) / 100)::integer;
+  if v_amount <= 0 then
+    return json_build_object('status', 'none');
+  end if;
+
+  insert into public.api_referral_rewards (order_id, referrer, buyer, amount)
+  values (o.id, v_ref, o.user_id, v_amount)
+  on conflict (order_id) do nothing;
+  if not found then
+    return json_build_object('status', 'already');
+  end if;
+
+  update public.api_users
+  set extra_limit = least(2000000000::bigint, extra_limit::bigint + v_amount)::integer, ref_earned = ref_earned + v_amount
+  where id = v_ref and not banned;
+  return json_build_object('status', 'ok', 'amount', v_amount);
+end;
+$$;
+
+-- Ringkasan referral sebuah akun untuk /dashboard.
+create or replace function public.ref_summary(p_user uuid)
+returns json
+language plpgsql
+set search_path = ''
+as $$
+declare
+  u public.api_users;
+begin
+  update public.api_users set ref_code = upper(substr(md5(gen_random_uuid()::text), 1, 8)) where id = p_user and ref_code is null;
+  select * into u from public.api_users where id = p_user;
+  if not found then
+    return null;
+  end if;
+  return json_build_object(
+    'code', u.ref_code,
+    'earned', u.ref_earned,
+    'invited', (select count(*) from public.api_users x where x.referred_by = u.id),
+    'buyers', (select count(distinct w.buyer) from public.api_referral_rewards w where w.referrer = u.id),
+    'rewards', (
+      select coalesce(json_agg(t), '[]'::json) from (
+        select w.created_at as at, w.amount from public.api_referral_rewards w
+        where w.referrer = u.id order by w.created_at desc limit 10
+      ) t
+    )
+  );
+end;
+$$;
+
+revoke all on function public.ref_attach(uuid, text) from public, anon, authenticated;
+revoke all on function public.ref_reward(text, integer) from public, anon, authenticated;
+revoke all on function public.ref_summary(uuid) from public, anon, authenticated;
+grant execute on function public.ref_attach(uuid, text) to service_role;
+grant execute on function public.ref_reward(text, integer) to service_role;
+grant execute on function public.ref_summary(uuid) to service_role;

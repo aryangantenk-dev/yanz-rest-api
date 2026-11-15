@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { supabaseRpc } from "@/db/store";
 import { forgetAllKeys } from "@/lib/auth/apikey";
+import { rewardReferral } from "@/lib/billing/referral";
 import { hit } from "@/lib/auth/limit";
 import { GatewayError, getPayment, type Payment } from "./welper";
 
@@ -90,6 +91,9 @@ export async function orderPaid(id: string, gatewayRef: string, amount: number):
   const res = await supabaseRpc<Paid>("plan_order_paid", { p_id: id, p_ref: gatewayRef, p_amount: amount });
   // Paket baru langsung berlaku di instance ini; instance lain menyusul paling lama satu menit.
   if (res.status === "paid") forgetAllKeys();
+  // Hadiah referral untuk pengundang pembelinya. Diulang juga saat pesanan "already" supaya
+  // hadiah yang gagal tercatat pada percobaan pertama tersusul; database menolaknya bila dobel.
+  if (res.status === "paid" || res.status === "already") await rewardReferral(id);
   return res;
 }
 

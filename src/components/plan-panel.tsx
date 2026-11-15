@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { LIMIT_PLAN, formatNumber, rupiah, type Plan } from "@/lib/plans";
 import { refreshAuth, useAuth } from "./auth-client";
 import { ArrowIcon, CheckIcon, RefreshIcon } from "./icons";
+import { RedeemForm } from "./rewards";
 
 type PlanInfo = { id: string; name: string; daily: number; perMinute: number; paid: boolean; expires_at: string | null; /** Tanpa kuota harian: akun admin (id "admin") atau paket tanpa batas. */ unlimited?: boolean; /** Saldo limit tambahan. */ extra?: number };
 type Order = { id: string; plan: string; days: number; qty: number; amount: number; total: number | null; status: string; payment_url: string; expires_at: string | null; created_at: string; paid_at: string | null };
@@ -468,6 +469,8 @@ export function PlanPanel({
           </div>
         </div>
       </section>
+
+      {authEnabled && <RedeemForm signedIn={signedIn} needsUsername={!!me?.needsUsername} loginHref="/login?next=/paket" onDone={() => void load()} />}
 
       {me && me.orders.length > 0 && (
         <section aria-labelledby="paket-riwayat" className="border border-line bg-card p-4 sm:p-6">

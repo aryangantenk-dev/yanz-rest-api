@@ -9,6 +9,7 @@ import { sameSite } from "@/lib/auth/origin";
 import { sessionUserId } from "@/lib/auth/session";
 import { HISTORY_KEEP, adminUserUsage } from "@/lib/auth/usage";
 import { adminUsers, apiBlockedUsers, normalizeEmail, setAdmin, setApiBlock, setBanned, userById, type User } from "@/lib/auth/users";
+import { cleanCode, createCode, deleteCode, listCodes, randomCode, type CodeInput } from "@/lib/billing/codes";
 import { adminAddLimit, adminOrders, adminSetPlan } from "@/lib/billing/orders";
 import { FEE_ON_CUSTOMER, GATEWAY_READY, WEBHOOK_READY, pingGateway } from "@/lib/billing/welper";
 import { LIMIT_MIN, LIMIT_PRICE, LIMIT_STEP, PLANS, PLAN_DAYS, planById } from "@/lib/plans";
@@ -35,6 +36,13 @@ export const runtime = "nodejs";
  *   /api/admin/keyblock?email=..&duration=7d&reason=..&key=..   blokir API sebuah akun: API key-nya ditolak, akunnya masih bisa masuk.
  *                                                        duration: 30m, 6h, 7d (menit/jam/hari), atau permanent (bawaan)
  *   /api/admin/keyunblock?email=..&key=..       buka blokir API
+ *   /api/admin/codes?key=..                           daftar kode hadiah beserta pemakaiannya
+ *   /api/admin/codecreate?plan=pro&days=7&limit=1000&max=10&expires=7d&code=..&note=..&key=..
+ *                                                     buat kode hadiah: berisi paket (plan + days), limit tambahan (limit),
+ *                                                     atau keduanya. max = kuota penukaran (kosong = tanpa batas);
+ *                                                     expires = masa berlaku kode, mis. 12h atau 7d, atau waktu ISO
+ *                                                     (kosong = tidak kedaluwarsa); code kosong = dibuat acak
+ *   /api/admin/codedelete?code=..&key=..              hapus kode hadiah (yang sudah ditukar orang tidak ditarik lagi)
  *   /api/admin/addlimit?email=..&amount=1000&key=..   tambah limit tambahan sebuah akun tanpa pembayaran (angka negatif mengurangi)
  *   /api/admin/setplan?email=..&plan=pro&days=30&key=..   beri paket tanpa pembayaran (menambah masa aktif);
  *                                                        plan=free mengembalikan akun ke paket gratis
@@ -70,6 +78,48 @@ function blockSpan(raw: string | null): number | null {
   if (!m) return null;
   const ms = Number(m[1]) * (m[2] === "m" ? 60_000 : m[2] === "h" ? 3_600_000 : 86_400_000);
   return ms >= 60_000 && ms <= 3650 * 86_400_000 ? ms : null;
+}
+
+const MAX_CODE_DAYS = 3650;
+const MAX_CODE_LIMIT = 10_000_000;
+const MAX_CODE_USES = 1_000_000;
+
+/** Bilangan bulat tak negatif dari parameter; kosong dianggap 0, selain itu null bila bukan bilangan bulat. */
+function wholeParam(raw: string | null): number | null {
+  const s = (raw || "").trim();
+  if (!s) return 0;
+  return /^\d{1,9}$/.test(s) ? Number(s) : null;
+}
+
+/** Susun kode hadiah dari parameter /api/admin/codecreate. Mengembalikan pesan galat bila ada yang salah. */
+function makeCode(sp: URLSearchParams): CodeInput | string {
+  const rawCode = (sp.get("code") || "").trim();
+  const code = rawCode ? cleanCode(rawCode) : randomCode();
+  if (!code) return "Parameter 'code' harus 4 sampai 32 karakter: huruf, angka, dan tanda hubung di tengah. Kosongkan agar dibuat otomatis.";
+
+  const planId = (sp.get("plan") || "").trim().toLowerCase();
+  const plan = planId && planId !== "none" ? planById(planId) : null;
+  if (planId && planId !== "none" && (!plan || plan.price <= 0)) return `Parameter 'plan' harus salah satu dari: ${PLANS.filter((p) => p.price > 0).map((p) => p.id).join(", ")}; atau kosong bila kode hanya berisi limit.`;
+  const days = wholeParam(sp.get("days"));
+  if (plan && (days === null || days < 1 || days > MAX_CODE_DAYS)) return `Parameter 'days' (lama paket) harus bilangan bulat dari 1 sampai ${MAX_CODE_DAYS}.`;
+  const qty = wholeParam(sp.get("limit"));
+  if (qty === null || qty > MAX_CODE_LIMIT) return "Parameter 'limit' (limit tambahan) harus bilangan bulat dari 0 sampai 10.000.000.";
+  if (!plan && qty === 0) return "Kode harus berisi paket (plan dan days), limit tambahan (limit), atau keduanya.";
+
+  const max = wholeParam(sp.get("max"));
+  if (max === null || max > MAX_CODE_USES) return "Parameter 'max' (kuota penukaran) harus bilangan bulat dari 1 sampai 1.000.000, atau kosong untuk tanpa batas.";
+
+  let expiresAt: string | null = null;
+  const rawExp = (sp.get("expires") || "").trim();
+  if (rawExp) {
+    const span = /^\d{1,7}\s*[mhd]$/i.test(rawExp) ? blockSpan(rawExp) : null;
+    const at = span ? Date.now() + span : Date.parse(rawExp);
+    if (!Number.isFinite(at)) return "Parameter 'expires' harus berupa lama waktu (mis. 30m, 12h, 7d) atau tanggal dan jam berformat ISO, atau kosong bila kode tidak kedaluwarsa.";
+    if (at <= Date.now() + 60_000) return "Masa berlaku kode harus paling cepat satu menit dari sekarang.";
+    if (at > Date.now() + MAX_CODE_DAYS * 86_400_000) return `Masa berlaku kode paling lama ${MAX_CODE_DAYS} hari dari sekarang.`;
+    expiresAt = new Date(at).toISOString();
+  }
+  return { code, plan: plan ? plan.id : "", days: plan ? (days ?? 0) : 0, qty, maxUses: max > 0 ? max : null, expiresAt, note: (sp.get("note") || "").trim().slice(0, 120) };
 }
 
 /** Siapa yang memanggil: pemegang ADMIN_KEY, atau akun admin yang sedang masuk. */
@@ -156,7 +206,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ action: string 
         },
       });
     }
-    if (action === "users" || action === "userban" || action === "userunban" || action === "setplan" || action === "orders" || action === "setadmin" || action === "keyblocks" || action === "keyblock" || action === "keyunblock" || action === "userusage" || action === "addlimit") {
+    if (action === "users" || action === "userban" || action === "userunban" || action === "setplan" || action === "orders" || action === "setadmin" || action === "keyblocks" || action === "keyblock" || action === "keyunblock" || action === "userusage" || action === "addlimit" || action === "codes" || action === "codecreate" || action === "codedelete") {
       if (!AUTH_BASE_READY) return json(503, { error: "Login belum dikonfigurasi di server ini (butuh Supabase dan AUTH_SECRET)." });
       if (action === "userusage") {
         const email = normalizeEmail(sp.get("email"));
@@ -204,6 +254,23 @@ export async function GET(req: Request, ctx: { params: Promise<{ action: string 
       }
       if (action === "users") return json(200, { result: await adminUsers(100) });
       if (action === "orders") return json(200, { result: await adminOrders(100) });
+      if (action === "codes") {
+        const codes = await listCodes(200);
+        return json(200, { result: { total: codes.length, codes } });
+      }
+      if (action === "codedelete") {
+        const code = cleanCode(sp.get("code"));
+        if (!code) return json(400, { error: "Parameter 'code' wajib diisi dengan kode yang mau dihapus." });
+        if (!(await deleteCode(code))) return json(404, { error: "Kode itu tidak ada." });
+        return json(200, { result: { code, deleted: true, message: "Kode dihapus dan tidak bisa ditukar lagi. Paket dan limit yang sudah diterima penukarnya tidak ditarik." } });
+      }
+      if (action === "codecreate") {
+        const made = await makeCode(sp);
+        if (typeof made === "string") return json(400, { error: made });
+        const saved = await createCode(made);
+        if (!saved) return json(409, { error: `Kode ${made.code} sudah ada. Pakai kode lain, atau kosongkan agar dibuat otomatis.` });
+        return json(200, { result: { ...saved, message: `Kode ${saved.code} dibuat.` } });
+      }
       if (action === "addlimit") {
         const email = normalizeEmail(sp.get("email"));
         if (!email) return json(400, { error: "Parameter 'email' wajib diisi dengan alamat email akun." });
@@ -249,7 +316,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ action: string 
       await adminBan(ip, reason);
       return json(200, { result: { ip, banned: true, reason } });
     }
-    return json(404, { error: "Aksi tidak dikenal. Gunakan: bans, ban, unban, userusage, addlimit, keyblocks, keyblock, keyunblock, apiblocks, apiblock, apiunblock, images, delimage, users, userban, userunban, setplan, setadmin, orders, paket." });
+    return json(404, { error: "Aksi tidak dikenal. Gunakan: bans, ban, unban, userusage, addlimit, codes, codecreate, codedelete, keyblocks, keyblock, keyunblock, apiblocks, apiblock, apiunblock, images, delimage, users, userban, userunban, setplan, setadmin, orders, paket." });
   } catch (e) {
     console.error("[api/admin]", e);
     return json(502, { error: "Gagal menghubungi database atau penyimpanan." });

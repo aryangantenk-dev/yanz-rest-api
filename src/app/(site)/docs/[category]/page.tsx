@@ -4,6 +4,8 @@ import { DocsShell } from "@/components/docs-shell";
 import { categories, categoryById } from "@/lib/api/categories";
 import { allMeta } from "@/lib/api/registry";
 import type { CategoryId } from "@/lib/api/types";
+import { BRAND_DOMAIN } from "@/lib/brand";
+import { jsonLdText, pageMeta } from "@/lib/seo";
 import { SITE_NAME, SITE_URL, SITE_PITCH } from "@/lib/site";
 
 export const dynamicParams = false;
@@ -17,12 +19,11 @@ export async function generateMetadata({ params }: { params: Promise<{ category:
   const c = categoryById[category as CategoryId];
   if (!c) return {};
   const count = allMeta().filter((e) => e.category === c.id).length;
-  return {
+  return pageMeta({
     title: c.seoTitle,
-    description: `${c.description} ${count} endpoint, ${SITE_PITCH}, lengkap dengan playground dan contoh kode.`,
-    alternates: { canonical: `/docs/${c.id}` },
-    openGraph: { url: `/docs/${c.id}`, title: `${c.seoTitle} | ${SITE_NAME}`, description: c.description },
-  };
+    description: `${c.description} ${count} endpoint ${SITE_NAME} (${BRAND_DOMAIN}), ${SITE_PITCH}, lengkap dengan playground dan contoh kode.`,
+    path: `/docs/${c.id}`,
+  });
 }
 
 export default async function CategoryDocs({ params }: { params: Promise<{ category: string }> }) {
@@ -37,7 +38,7 @@ export default async function CategoryDocs({ params }: { params: Promise<{ categ
       {
         "@type": "BreadcrumbList",
         itemListElement: [
-          { "@type": "ListItem", position: 1, name: "Beranda", item: SITE_URL },
+          { "@type": "ListItem", position: 1, name: SITE_NAME, item: `${SITE_URL}/` },
           { "@type": "ListItem", position: 2, name: "Dokumentasi", item: `${SITE_URL}/docs` },
           { "@type": "ListItem", position: 3, name: c.name, item: `${SITE_URL}/docs/${c.id}` },
         ],
@@ -54,7 +55,7 @@ export default async function CategoryDocs({ params }: { params: Promise<{ categ
   return (
     <>
       <DocsShell active={c.id} />
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLdText(jsonLd) }} />
     </>
   );
 }

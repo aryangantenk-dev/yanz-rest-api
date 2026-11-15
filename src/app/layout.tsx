@@ -1,8 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import localFont from "next/font/local";
-import { AUTH_ENABLED, KEY_REQUIRED } from "@/lib/auth/config";
-import { SITE_DESCRIPTION, SITE_NAME, SITE_TAGLINE, SITE_URL } from "@/lib/site";
+import { AUTH_ENABLED } from "@/lib/auth/config";
+import { HOME_DESCRIPTION, HOME_SHARE_TITLE, HOME_TITLE, KEYWORDS, jsonLdText, siteJsonLd } from "@/lib/seo";
+import { SITE_NAME, SITE_URL } from "@/lib/site";
 import "./globals.css";
 
 // Font disimpan di repo (lisensi OFL-1.1) supaya build tidak bergantung pada jaringan
@@ -22,29 +23,22 @@ const code = localFont({
   fallback: ["ui-monospace", "SFMono-Regular", "Menlo", "Consolas", "monospace"],
 });
 
+// Nilai bawaan untuk semua halaman. Beranda, dokumentasi, dan halaman publik lain menimpanya
+// dengan judul, canonical, dan Open Graph miliknya sendiri lewat pageMeta() di src/lib/seo.ts.
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  title: { default: `${SITE_NAME} — ${SITE_TAGLINE}`, template: `%s | ${SITE_NAME}` },
-  description: SITE_DESCRIPTION,
+  title: { default: HOME_TITLE, template: `%s | ${SITE_NAME}` },
+  description: HOME_DESCRIPTION,
   applicationName: SITE_NAME,
-  keywords: [
-    "yanz api", "yanz.api", "rest api gratis", ...(KEY_REQUIRED ? ["api key gratis"] : ["api tanpa apikey", "no api key"]), "free rest api indonesia", "api downloader", "api ai chat gratis",
-    "api cuaca", "api gempa bmkg", "api jadwal sholat", "api al-quran", "qr code api", "short url api", "api random quotes bahasa indonesia",
-    "api developer indonesia",
-  ],
-  authors: [{ name: SITE_NAME }],
+  keywords: KEYWORDS,
+  authors: [{ name: SITE_NAME, url: SITE_URL }],
   creator: SITE_NAME,
-  alternates: { canonical: "/" },
+  publisher: SITE_NAME,
   robots: { index: true, follow: true, googleBot: { index: true, follow: true, "max-image-preview": "large", "max-snippet": -1 } },
-  openGraph: {
-    type: "website",
-    locale: "id_ID",
-    url: "/",
-    siteName: SITE_NAME,
-    title: `${SITE_NAME} — ${SITE_TAGLINE}`,
-    description: SITE_DESCRIPTION,
-  },
-  twitter: { card: "summary_large_image", title: `${SITE_NAME} — ${SITE_TAGLINE}`, description: SITE_DESCRIPTION },
+  // Tanpa `url`: halaman yang tidak punya Open Graph sendiri tidak boleh mengaku beralamat di beranda.
+  openGraph: { type: "website", locale: "id_ID", siteName: SITE_NAME, title: HOME_SHARE_TITLE, description: HOME_DESCRIPTION },
+  twitter: { card: "summary_large_image", title: HOME_SHARE_TITLE, description: HOME_DESCRIPTION },
+  appleWebApp: { title: SITE_NAME },
   category: "technology",
 };
 
@@ -70,31 +64,12 @@ const refScript = AUTH_ENABLED
   : "";
 
 export default function RootLayout({ children }: { children: ReactNode }) {
-  const jsonLd = {
-    "@context": "https://schema.org",
-    "@graph": [
-      {
-        "@type": "WebSite",
-        "@id": `${SITE_URL}/#website`,
-        url: SITE_URL,
-        name: SITE_NAME,
-        description: SITE_DESCRIPTION,
-        inLanguage: "id-ID",
-      },
-      {
-        "@type": "Organization",
-        "@id": `${SITE_URL}/#org`,
-        name: SITE_NAME,
-        url: SITE_URL,
-        logo: `${SITE_URL}/icon`,
-      },
-    ],
-  };
-
   return (
     <html lang="id" className={`${body.variable} ${code.variable}`} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript + signedScript + refScript }} />
+        {/* Data terstruktur situs: WebSite, Organization, SoftwareApplication (lihat siteJsonLd). */}
+        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLdText(siteJsonLd()) }} />
       </head>
       <body className="flex min-h-dvh flex-col font-sans">
         <a href="#konten" className="btn btn-primary fixed left-4 top-2 z-[100] -translate-y-24 focus:translate-y-0">
@@ -103,7 +78,6 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         {/* Kerangka halaman (header, menu, footer) ada di layout tiap bagian:
             (site) untuk beranda dan dokumentasi, (auth) untuk masuk dan daftar, (panel) untuk area anggota. */}
         {children}
-        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       </body>
     </html>
   );

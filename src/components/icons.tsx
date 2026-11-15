@@ -1,4 +1,5 @@
 import type { CategoryId } from "@/lib/api/types";
+import { BRAND_LOGO_ALT } from "@/lib/brand";
 
 type P = { className?: string };
 
@@ -219,10 +220,14 @@ export function CloseIcon({ className }: P) {
   );
 }
 
-/** Tanda merek: kotak tajam berwarna aksen dengan huruf Y. */
-export function LogoMark({ className }: P) {
+/**
+ * Tanda merek: kotak tajam berwarna aksen dengan huruf Y. Punya teks pengganti (setara `alt` pada <img>)
+ * lewat role="img", aria-label, dan <title>. Tautan yang membungkusnya tetap memakai aria-label sendiri.
+ */
+export function LogoMark({ className, alt = BRAND_LOGO_ALT }: P & { alt?: string }) {
   return (
-    <svg viewBox="0 0 32 32" className={className} aria-hidden>
+    <svg viewBox="0 0 32 32" className={className} role="img" aria-label={alt}>
+      <title>{alt}</title>
       <rect width="32" height="32" fill="var(--accent)" />
       <path d="M9 8l7 9.5V25M23 8l-7 9.5" stroke="var(--on-accent)" strokeWidth="3.2" strokeLinecap="square" strokeLinejoin="miter" fill="none" />
     </svg>

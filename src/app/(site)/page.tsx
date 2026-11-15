@@ -14,11 +14,11 @@ import { RATE_LIMIT } from "@/lib/limits";
 import { KEY_REQUIRED } from "@/lib/auth/config";
 import { FREE_PLAN, LIMIT_PRICE, LIMIT_STEP, PLANS, formatNumber, rupiah } from "@/lib/plans";
 import { showcase, showcaseHost } from "@/lib/showcase";
-import { SITE_CREATOR, SITE_NAME, SITE_TAGLINE, SITE_URL, SUPPORT_URL } from "@/lib/site";
+import { BRAND_ALTERNATE_NAMES } from "@/lib/brand";
+import { HOME_DESCRIPTION, HOME_SHARE_TITLE, HOME_TITLE, jsonLdText, pageMeta } from "@/lib/seo";
+import { SITE_CREATOR, SITE_NAME, SITE_URL, SUPPORT_URL } from "@/lib/site";
 
-export const metadata: Metadata = {
-  alternates: { canonical: "/" },
-};
+export const metadata: Metadata = pageMeta({ title: HOME_TITLE, absolute: true, shareTitle: HOME_SHARE_TITLE, description: HOME_DESCRIPTION, path: "/" });
 
 const PAID_PLANS = PLANS.filter((p) => p.price > 0);
 
@@ -99,14 +99,17 @@ export default function Home() {
       {
         "@type": "WebPage",
         "@id": `${SITE_URL}/#webpage`,
-        url: SITE_URL,
-        name: `${SITE_NAME} — ${SITE_TAGLINE}`,
+        url: `${SITE_URL}/`,
+        name: HOME_TITLE,
+        description: HOME_DESCRIPTION,
         isPartOf: { "@id": `${SITE_URL}/#website` },
+        about: { "@id": `${SITE_URL}/#app` },
         inLanguage: "id-ID",
       },
       {
         "@type": "WebAPI",
         name: SITE_NAME,
+        alternateName: BRAND_ALTERNATE_NAMES,
         description: `REST API ${KEY_REQUIRED ? "gratis dengan API key" : "gratis tanpa API key"} dengan ratusan fitur untuk developer Indonesia.`,
         documentation: `${SITE_URL}/docs`,
         url: `${SITE_URL}/api`,
@@ -401,7 +404,7 @@ export default function Home() {
         </div>
       </section>
 
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLdText(jsonLd) }} />
     </>
   );
 }

@@ -5,13 +5,14 @@ import { AUTH_ENABLED, KEY_REQUIRED } from "@/lib/auth/config";
 import { FEE_ON_CUSTOMER, GATEWAY_READY } from "@/lib/billing/welper";
 import { APPEAL_URL } from "@/lib/guard";
 import { FREE_PLAN, LIMIT_CHOICES, LIMIT_MAX, LIMIT_MIN, LIMIT_PRICE, LIMIT_STEP, MAX_PLAN_DAYS, PLANS, PLAN_DAY_CHOICES, formatNumber, rupiah } from "@/lib/plans";
+import { pageMeta } from "@/lib/seo";
 import { SITE_NAME } from "@/lib/site";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMeta({
   title: "Paket",
   description: `Pilihan paket ${SITE_NAME}: paket Gratis dengan ${formatNumber(FREE_PLAN.daily)} permintaan per hari, paket harian dengan kuota lebih besar, dan limit tambahan ${rupiah(LIMIT_PRICE * LIMIT_STEP)} per ${formatNumber(LIMIT_STEP)} limit. Dibayar lewat QRIS.`,
-  alternates: { canonical: "/paket" },
-};
+  path: "/paket",
+});
 
 const notes = [
   { t: "Kuota dihitung per akun", d: "Setiap permintaan ke /api yang membawa API key kamu mengurangi kuota harian akunmu, termasuk permintaan yang berakhir dengan galat. Mengganti API key tidak mengembalikan kuota." },

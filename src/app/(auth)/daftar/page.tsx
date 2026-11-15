@@ -2,12 +2,11 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { LoginForm } from "@/components/login-form";
 import { HAS_EMAIL, HAS_GOOGLE } from "@/lib/auth/config";
+import { pageMeta } from "@/lib/seo";
 import { SITE_NAME } from "@/lib/site";
 
 export const metadata: Metadata = {
-  title: "Daftar",
-  description: `Daftar akun ${SITE_NAME} dengan Google atau email untuk mendapat API key gratis.`,
-  alternates: { canonical: "/daftar" },
+  ...pageMeta({ title: "Daftar", description: `Daftar akun ${SITE_NAME} dengan Google atau email untuk mendapat API key gratis.`, path: "/daftar" }),
   robots: { index: false, follow: true },
 };
 

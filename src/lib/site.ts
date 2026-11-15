@@ -1,6 +1,8 @@
 import { KEY_REQUIRED } from "@/lib/auth/config";
+import { BRAND_NAME } from "@/lib/brand";
 
-export const SITE_NAME = "yanz.api";
+/** Nama merek. Identitas merek lainnya (domain, nama lain, teks logo) ada di src/lib/brand.ts. */
+export const SITE_NAME = BRAND_NAME;
 /** Nilai field `creator` pada setiap respons JSON. */
 export const SITE_CREATOR = "yanz.api";
 /** Kalimat pendek pembeda: berubah begitu API key diwajibkan (login aktif). */
@@ -8,8 +10,6 @@ export const SITE_CREATOR = "yanz.api";
 export const SUPPORT_URL = "https://sociabuzz.com/vibeyan/tribe";
 export const SITE_PITCH = KEY_REQUIRED ? "gratis dengan API key" : "gratis tanpa API key";
 export const SITE_TAGLINE = KEY_REQUIRED ? "REST API Gratis untuk Developer Indonesia" : "REST API Gratis Tanpa API Key";
-export const SITE_DESCRIPTION =
-  `yanz.api adalah REST API ${SITE_PITCH} dengan 165 endpoint: AI chat, text to image, canvas (brat, iqc), downloader TikTok/Instagram/Facebook, pencarian Pinterest, game untuk bot WhatsApp, cuaca, gempa BMKG, Al-Qur'an, jadwal sholat, scraper komik & anime, film & serial (TMDB + player embed), data JKT48, dan banyak lagi. ${KEY_REQUIRED ? "Masuk dengan Google atau email untuk mendapat API key gratis. " : ""}Dokumentasi lengkap dengan playground interaktif.`;
 
 const vercelUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "";
 

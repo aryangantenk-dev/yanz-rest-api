@@ -19,7 +19,7 @@ Kode berada langsung di root repository, jadi Vercel maupun Netlify mendeteksiny
 | --- | --- |
 | `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` | URL proyek Supabase dan service role / secret key. Mengaktifkan statistik pemakaian dan pemendek URL bawaan (`/api/tools/shorturl`) lewat REST, tanpa koneksi Postgres. Jalankan `supabase/schema.sql` sekali di SQL Editor. |
 | `DATABASE_URL` | Alternatif: connection string PostgreSQL biasa. Tabel dibuat otomatis. Dipakai bila variabel Supabase di atas kosong. |
-| `NEXT_PUBLIC_SITE_URL` | Domain produksi untuk canonical URL, sitemap, dan Open Graph. |
+| `NEXT_PUBLIC_SITE_URL` | Domain produksi untuk canonical URL, sitemap, robots.txt, Open Graph, dan data terstruktur. Isi dengan alamat yang menjawab langsung (200), bukan yang dialihkan: bila `yanzapi.my.id` dialihkan ke `www.yanzapi.my.id`, isinya `https://www.yanzapi.my.id`. Teks merek (nama, domain, nama lain, teks logo) ada di `src/lib/brand.ts`; judul dan deskripsi halaman di `src/lib/seo.ts`. |
 
 | `ADMIN_KEY` | Kunci rahasia owner untuk endpoint admin (daftar blokir, buka blokir, blokir manual). Tanpa ini endpoint admin nonaktif. |
 | `RATE_LIMIT_PER_MIN` | Batas permintaan per menit untuk setiap IP. Default `45`. |

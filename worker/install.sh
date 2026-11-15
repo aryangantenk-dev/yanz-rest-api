@@ -39,17 +39,18 @@ if [ -z "$SELF_DIR" ] || [ ! -f "$SELF_DIR/server.py" ] || [ ! -f "$SELF_DIR/ctl
     as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates curl
   fi
   if [ -d "$TARGET_DIR/.git" ]; then
-    echo "Memperbarui kode di $TARGET_DIR ($REPO_BRANCH)..."
+    echo "Memperbarui kode di $TARGET_DIR..."
     git -C "$TARGET_DIR" fetch --depth 1 origin "$REPO_BRANCH"
     git -C "$TARGET_DIR" checkout -f FETCH_HEAD
   else
-    echo "Mengunduh yanz-worker ke $TARGET_DIR ($REPO_BRANCH)..."
+    echo "Mengunduh yanz-worker ke $TARGET_DIR..."
     rm -rf "$TARGET_DIR"
     git clone --depth 1 -b "$REPO_BRANCH" "$REPO_URL" "$TARGET_DIR"
   fi
-  if [ ! -f "$TARGET_DIR/worker/ctl.sh" ] && [ "$REPO_BRANCH" = "main" ]; then
-    git -C "$TARGET_DIR" fetch --depth 1 origin arena/f8aec1ff-yanz-rest-api \
-      && git -C "$TARGET_DIR" checkout -f FETCH_HEAD
+  if [ -z "${YANZ_BRANCH:-}" ] && git -C "$TARGET_DIR" fetch --depth 1 origin arena/f8aec1ff-yanz-rest-api >/dev/null 2>&1; then
+    if [ ! -f "$TARGET_DIR/worker/ctl.sh" ] || ! grep -q "libatomic1" "$TARGET_DIR/worker/Dockerfile" 2>/dev/null; then
+      git -C "$TARGET_DIR" checkout -f FETCH_HEAD
+    fi
   fi
   exec bash "$TARGET_DIR/worker/install.sh" "$@"
 fi
@@ -209,7 +210,8 @@ install_native() {
     as_root apt-get update -qq
     as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates curl bzip2 ffmpeg python3 python3-venv python3-pip \
-      libgl1 libglib2.0-0 fonts-liberation fonts-noto-core fonts-noto-color-emoji
+      libatomic1 libgomp1 libstdc++6 libgl1 libglib2.0-0 \
+      fonts-liberation fonts-noto-core fonts-noto-color-emoji
   elif ! command -v ffmpeg >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
     echo "ffmpeg dan python3 wajib terpasang di sistem ini." >&2
     exit 1

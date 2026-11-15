@@ -1,18 +1,21 @@
 services:
   worker:
-    build: .
+    build:
+      context: .
+      args:
+        WHISPER_MODEL: ${WHISPER_MODEL:-small}
     image: yanz-worker
     container_name: yanz-worker
     restart: unless-stopped
     env_file: .env
     ports:
-      - "8080:8080"
+      - "${PORT:-8080}:${PORT:-8080}"
     volumes:
       - worker-data:/data
     # Chromium butuh memori bersama yang lebih besar dari bawaan Docker (64 MB).
     shm_size: "1gb"
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:${PORT:-8080}/health"]
       interval: 30s
       timeout: 5s
       retries: 3

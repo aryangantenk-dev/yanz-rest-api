@@ -18,6 +18,7 @@ import { web2apkEndpoints } from "./web2apk";
 import { toUrlEndpoints } from "./tourl";
 import { jkt48Endpoints } from "./jkt48";
 import { zefameEndpoints } from "./zefame";
+import { workerEndpoints } from "./worker";
 import { categories } from "./categories";
 
 export const endpoints: Endpoint[] = [
@@ -41,6 +42,7 @@ export const endpoints: Endpoint[] = [
   ...web2apkEndpoints,
   ...toUrlEndpoints,
   ...zefameEndpoints,
+  ...workerEndpoints,
 ];
 
 const index = new Map(endpoints.map((e) => [`${e.category}/${e.slug}`, e]));

@@ -1,6 +1,6 @@
 # yanz.api
 
-REST API gratis (165 endpoint) beserta dokumentasi dan playground interaktif. Bisa dijalankan terbuka tanpa API key, atau dengan login (Google / email + kode verifikasi) dan API key berawalan `yn-` untuk setiap pengguna. Dibangun dengan Next.js 16 (App Router).
+REST API gratis (175 endpoint) beserta dokumentasi dan playground interaktif. Bisa dijalankan terbuka tanpa API key, atau dengan login (Google / email + kode verifikasi) dan API key berawalan `yn-` untuk setiap pengguna. Dibangun dengan Next.js 16 (App Router).
 
 ## Menjalankan lokal
 
@@ -37,6 +37,7 @@ Kode berada langsung di root repository, jadi Vercel maupun Netlify mendeteksiny
 | `WELPER_API_KEY` | API key payment gateway QRIS Welper (`gwk_…`) untuk menjual paket di `/paket`. Tanpa ini halaman paket tetap tampil, tetapi tombol bayar diganti ajakan menghubungi owner. |
 | `WELPER_WEBHOOK_SECRET` | Secret webhook Welper (`whsec_…`) untuk memeriksa tanda tangan notifikasi pembayaran di `/api/paket/webhook`. |
 | `WELPER_FEE_BEARER` | `customer` (default: pembeli menanggung biaya QRIS) atau `merchant` (biaya dipotong dari yang kamu terima). |
+| `WORKER_URL` + `WORKER_KEY` | Alamat dan kunci worker di mesin sendiri (folder `worker/`) untuk endpoint yang butuh browser, ffmpeg, atau model AI. Tanpa keduanya endpoint itu menjawab 503. Lihat bagian "Worker di mesin sendiri". |
 
 Tanpa database, semua endpoint lain tetap berjalan normal. Lihat `.env.example`. Status database bisa dicek di `/api/health`.
 
@@ -251,6 +252,30 @@ Selama diblokir:
 - endpoint itu ditandai **Nonaktif** di halaman dokumentasi, `blocked: true` di `GET /api`, dan terdaftar di `GET /api/status` (terbuka tanpa API key).
 
 Daftarnya disimpan di tabel `blocked_endpoints` dan dibaca ulang paling lama setiap 30 detik, jadi perubahan berlaku di semua server dalam waktu itu. Bila database tidak bisa dihubungi, daftar terakhir yang berhasil dibaca tetap dipakai.
+
+## Worker di mesin sendiri
+
+Sepuluh endpoint dikerjakan layanan terpisah di folder `worker/` (Python, Docker), bukan di Vercel, karena butuh Chromium, ffmpeg, atau model AI. Worker dipasang di mesin sendiri, misalnya mesin Instabox, lalu dipanggil yanz.api dengan kunci rahasia.
+
+| Endpoint | Isi | Hasil |
+| --- | --- | --- |
+| `/api/tools/ssweb?url=…` | Tangkapan layar situs: `device`, `full=1` (satu halaman penuh), `dark=1`, `format`, `wait` | Gambar |
+| `/api/tools/web2pdf?url=…` | Halaman web jadi PDF: `paper`, `landscape=1`, `wait` | Tautan PDF |
+| `/api/tools/tomp3` | Video atau audio jadi `mp3`, `ogg` (Opus), atau `m4a`; maks 10 menit | Tautan audio |
+| `/api/tools/togif` | Potongan video jadi GIF: `start`, `duration` (maks 15 detik), `width`, `fps` | Tautan GIF |
+| `/api/tools/compress` | Kompres video ke MP4 H.264: `quality` low, medium, high; maks 5 menit | Tautan video |
+| `/api/tools/sticker` | Stiker WhatsApp WebP 512x512 dari gambar, GIF, atau video pendek: `fit`, `duration` | Berkas WebP |
+| `/api/image/removebg` | Hapus latar foto | PNG transparan |
+| `/api/tools/ocr` | Baca teks di gambar | JSON (teks per baris) |
+| `/api/ai/transcribe` | Suara ke teks (Whisper): `lang`; maks 3 menit | JSON |
+| `/api/ai/tts?text=…` | Teks ke suara bahasa Indonesia: `speed`, `format`; maks 600 karakter | Tautan audio |
+
+- Berkas masukan dikirim lewat parameter `url` (tautan publik, maks 50 MB) atau diunggah lewat POST multipart field `file` (maks 4 MB, batas Vercel).
+- Hasil berupa tautan memakai alamat `/w/<nama acak>` di domain ini, yang mengalihkan ke berkas di mesin worker. Berkas dihapus setelah 1 jam.
+- Bila worker mati atau belum diatur, sepuluh endpoint ini menjawab 503 dengan pesan yang jelas; endpoint lain tidak terpengaruh.
+- Worker menolak tautan ke alamat internal (localhost, jaringan privat), termasuk dari dalam halaman yang dipotret.
+
+Cara memasang ada di [`worker/README.md`](worker/README.md). Ringkasnya: jalankan `bash install.sh` di folder `worker/` pada mesin itu, buka port 8080 sebagai URL publik, lalu isi `WORKER_URL` dan `WORKER_KEY` di hosting dan deploy ulang.
 
 ## Game untuk bot WhatsApp (Baileys)
 

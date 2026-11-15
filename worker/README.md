@@ -1,61 +1,71 @@
 # yanz-worker
 
-Layanan pendamping yanz.api untuk tugas yang tidak bisa dijalankan di Vercel: tangkapan layar situs dan PDF (Chromium), konversi media (ffmpeg), hapus latar gambar, OCR, suara ke teks (Whisper), dan teks ke suara. Dijalankan dengan Docker di mesin sendiri, misalnya mesin Instabox.
+Layanan pendamping yanz.api untuk 10 endpoint yang butuh browser, konversi media, atau model AI: tangkapan layar situs dan PDF (Chromium), konversi media (ffmpeg), hapus latar gambar, OCR, suara ke teks (Whisper), dan teks ke suara.
+
+Dapat dipasang **langsung tanpa Docker** (otomatis di mesin kontainer seperti Instabox) maupun dengan **Docker Compose** di VPS biasa.
 
 ## Kebutuhan mesin
 
-- Linux 64-bit (x86_64) dengan Docker dan Docker Compose.
-- RAM 4 GB atau lebih (disarankan 8 GB) dan ruang disk kosong sekitar 8 GB untuk image dan model.
-- Satu port yang bisa dibuka ke internet lewat HTTPS (bawaan 8080).
+- Linux 64-bit (`x86_64`) berbasis Ubuntu atau Debian. Tidak wajib ada Docker.
+- RAM minimal 4 GB (disarankan 8 GB) dan ruang disk kosong sekitar 5–8 GB untuk browser dan model AI.
+- Satu port yang bisa dibuka ke internet lewat HTTPS (bawaan `8080`).
 
-## Pasang
+## Pasang di Instabox (satu baris, tanpa Docker)
 
-Di mesin itu:
+Buka terminal mesin Instabox, lalu jalankan:
 
 ```bash
-git clone --depth 1 -b arena/9b163253-rest-api https://github.com/aryangantenk-dev/yanz-rest-api.git yanz
+curl -fsSL https://raw.githubusercontent.com/aryangantenk-dev/yanz-rest-api/main/worker/install.sh | bash
+```
+
+Atau dari hasil `git clone`:
+
+```bash
+git clone --depth 1 https://github.com/aryangantenk-dev/yanz-rest-api.git yanz
 cd yanz/worker
 bash install.sh
 ```
 
-Skrip itu membuat kunci rahasia di `worker/.env`, membangun image (pertama kali 10 sampai 20 menit), menyalakan worker di port 8080, menguji semua fitur, lalu mencetak kuncinya.
+Skrip ini otomatis mendeteksi lingkungan Instabox/kontainer dan memasang semuanya langsung tanpa Docker (`.venv`, `ffmpeg`, Chromium, model rembg, suara Bahasa Indonesia, dan Whisper yang disesuaikan dengan kapasitas RAM mesin), menyalakan worker di latar belakang pada port `8080`, menguji ke-10 fitur, lalu mencetak `WORKER_KEY`.
 
-Setelah itu:
+Setelah selesai:
 
-1. Buka port 8080 sebagai URL publik. Di Instabox: dashboard mesin, bagian port, publikasikan port `8080`. URL-nya berbentuk `https://8080-<id-mesin>.instabox.tech`.
+1. Buka port `8080` sebagai URL publik (**Public**) di dashboard Instabox. URL-nya berbentuk `https://8080-<id-mesin>.instabox.tech`.
 2. Cek dari browser: `<URL>/health` harus menampilkan `{"ok": true, ...}`.
-3. Di Vercel (Settings, Environment Variables) isi `WORKER_URL` dengan URL itu dan `WORKER_KEY` dengan kunci yang dicetak skrip. Lalu deploy ulang.
+3. Di Vercel (**Settings → Environment Variables**) isi `WORKER_URL` dengan URL publik tadi dan `WORKER_KEY` dengan kunci yang dicetak skrip, lalu deploy ulang. Status sambungannya bisa dicek di `/api/health` (`"worker": "connected"`).
 
 ## Perintah sehari-hari
 
-Jalankan dari folder `worker/`:
+Jalankan dari folder `worker/` (biasanya `~/yanz-rest-api/worker`):
 
 | Tujuan | Perintah |
 | --- | --- |
-| Lihat log | `docker compose logs --tail 100 -f worker` |
-| Uji semua fitur | `docker compose exec worker python selftest.py` |
-| Uji satu fitur | `docker compose exec worker python selftest.py tts transcribe` |
+| Cek status & sisa disk | `bash ctl.sh status` |
+| Lihat log berjalan | `bash ctl.sh logs` |
+| Nyalakan ulang worker | `bash ctl.sh restart` |
+| Matikan sementara | `bash ctl.sh stop` |
+| Uji semua fitur | `bash ctl.sh test` |
+| Uji satu fitur | `bash ctl.sh test tts transcribe` |
 | Perbarui ke versi terbaru | `git pull && bash install.sh` |
-| Ganti kunci | `bash install.sh --ganti-kunci`, lalu perbarui `WORKER_KEY` di Vercel |
-| Matikan | `docker compose down` |
+| Ganti kunci rahasia | `bash install.sh --ganti-kunci`, lalu perbarui `WORKER_KEY` di Vercel |
 
-Worker menyala lagi sendiri setelah mesin dihidupkan ulang (`restart: unless-stopped`).
+Di VPS dengan `systemd`, worker didaftarkan sebagai layanan `yanz-worker`. Di kontainer tanpa `systemd` seperti Instabox, `ctl.sh` menjaga proses tetap hidup di latar belakang setelah terminal ditutup dan menyalakannya kembali saat terminal dibuka setelah mesin dijeda.
 
 ## Pengaturan (`worker/.env`)
 
 | Nama | Bawaan | Fungsi |
 | --- | --- | --- |
-| `WORKER_KEY` | dibuat `install.sh` | Kunci yang harus dikirim yanz.api di header `x-worker-key`. Minimal 24 karakter. |
-| `MAX_JOBS` | `2` | Jumlah pekerjaan berat yang berjalan bersamaan. |
+| `WORKER_KEY` | dibuat `install.sh` | Kunci yang dikirim yanz.api di header `x-worker-key`. Minimal 24 karakter. |
+| `PORT` | `8080` | Port HTTP worker. |
+| `WHISPER_MODEL` | otomatis (`base` / `small`) | Ukuran model Whisper: `base` bila RAM di bawah 5 GB, `small` di atasnya. |
+| `MAX_JOBS` | `2` (`1` bila RAM < 3,2 GB) | Jumlah pekerjaan berat yang berjalan bersamaan. |
 | `MAX_QUEUE` | `6` | Panjang antrean; di atas itu permintaan ditolak dengan 503. |
 | `FILE_TTL_SEC` | `3600` | Umur berkas hasil sebelum dihapus. |
 | `MAX_INPUT_MB` | `50` | Batas ukuran berkas masukan dari tautan. |
 | `MAX_MEDIA_SEC` | `600` | Batas durasi media untuk konversi. |
 | `MAX_SPEECH_SEC` | `180` | Batas durasi audio untuk suara ke teks. |
 
-Setelah mengubah `.env`, jalankan `docker compose up -d`.
-
-Model Whisper bawaan adalah `small`. Untuk mesin yang lebih kecil, bangun dengan `docker compose build --build-arg WHISPER_MODEL=base`.
+Setelah mengubah `.env`, jalankan `bash ctl.sh restart` (atau `docker compose up -d` bila memakai mode Docker).
 
 ## Rute
 
@@ -66,11 +76,10 @@ Semua rute `/v1/*` memakai `POST` dan header `x-worker-key`. Parameter lewat que
 | `/v1/ssweb`, `/v1/sticker`, `/v1/removebg` | Berkas gambar langsung |
 | `/v1/web2pdf`, `/v1/tomp3`, `/v1/togif`, `/v1/compress`, `/v1/tts` | JSON berisi nama berkas; berkasnya di `/f/<nama>` |
 | `/v1/ocr`, `/v1/transcribe` | JSON berisi teks |
-| `GET /health` | Status singkat; dengan kunci, juga antrean dan sisa disk |
+| `GET /health` | Status singkat; dengan kunci yang cocok, juga daftar tugas, antrean, dan sisa disk |
 | `GET /f/<nama>` | Berkas hasil. Terbuka tanpa kunci; namanya acak dan berlaku `FILE_TTL_SEC` |
 
 ## Keamanan
 
 - URL publik mesin bukan rahasia, jadi semua rute pengolah menolak permintaan tanpa kunci.
 - Tautan masukan ke alamat internal (localhost, jaringan privat, alamat metadata cloud) ditolak, termasuk setelah pengalihan dan untuk setiap permintaan dari halaman yang dipotret.
-- Kontainer berjalan sebagai pengguna biasa, bukan root.

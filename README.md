@@ -255,7 +255,7 @@ Daftarnya disimpan di tabel `blocked_endpoints` dan dibaca ulang paling lama set
 
 ## Worker di mesin sendiri
 
-Sepuluh endpoint dikerjakan layanan terpisah di folder `worker/` (Python, Docker), bukan di Vercel, karena butuh Chromium, ffmpeg, atau model AI. Worker dipasang di mesin sendiri, misalnya mesin Instabox, lalu dipanggil yanz.api dengan kunci rahasia.
+Sepuluh endpoint dikerjakan layanan terpisah di folder `worker/` (Python; bisa berjalan langsung tanpa Docker di Instabox maupun memakai Docker di VPS), bukan di Vercel, karena butuh Chromium, ffmpeg, atau model AI. Worker dipasang di mesin sendiri, misalnya mesin Instabox, lalu dipanggil yanz.api dengan kunci rahasia.
 
 | Endpoint | Isi | Hasil |
 | --- | --- | --- |
@@ -275,7 +275,7 @@ Sepuluh endpoint dikerjakan layanan terpisah di folder `worker/` (Python, Docker
 - Bila worker mati atau belum diatur, sepuluh endpoint ini menjawab 503 dengan pesan yang jelas; endpoint lain tidak terpengaruh.
 - Worker menolak tautan ke alamat internal (localhost, jaringan privat), termasuk dari dalam halaman yang dipotret.
 
-Cara memasang ada di [`worker/README.md`](worker/README.md). Ringkasnya: jalankan `bash install.sh` di folder `worker/` pada mesin itu, buka port 8080 sebagai URL publik, lalu isi `WORKER_URL` dan `WORKER_KEY` di hosting dan deploy ulang.
+Cara memasang ada di [`worker/README.md`](worker/README.md). Ringkasnya: jalankan skrip satu baris `worker/install.sh` di terminal Instabox (otomatis tanpa Docker), buka port `8080` sebagai URL publik, lalu isi `WORKER_URL` dan `WORKER_KEY` di Vercel dan deploy ulang. Status sambungannya terlihat di `/api/health`.
 
 ## Game untuk bot WhatsApp (Baileys)
 

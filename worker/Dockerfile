@@ -18,14 +18,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install -r requirements.txt && playwright install --with-deps chromium
+RUN pip install -r requirements.txt \
+    && (pip uninstall -y opencv-python || true) \
+    && pip install --force-reinstall --no-deps opencv-python-headless \
+    && playwright install --with-deps chromium
 
 # Model diunduh saat build supaya permintaan pertama tidak menunggu unduhan.
 ARG WHISPER_MODEL=small
 ENV WHISPER_MODEL=${WHISPER_MODEL}
 RUN mkdir -p /models/rembg /models/tts /models/hf \
     && python -c "from rembg import new_session; new_session('u2net')" \
-    && curl -fsSL https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-id_ID-news_tts-medium.tar.bz2 | tar xj -C /models/tts \
+    && curl -fL --retry 3 --retry-delay 2 -sS https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-id_ID-news_tts-medium.tar.bz2 | tar xj -C /models/tts \
     && python -c "import os; from faster_whisper import WhisperModel; WhisperModel(os.environ['WHISPER_MODEL'], device='cpu', compute_type='int8')"
 
 COPY server.py selftest.py ./

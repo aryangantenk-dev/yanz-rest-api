@@ -1,1 +1,6 @@
 .env
+.venv/
+.data/
+.models/
+.browsers/
+__pycache__/

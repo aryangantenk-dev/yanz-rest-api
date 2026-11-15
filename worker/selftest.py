@@ -1,7 +1,7 @@
 """
-Uji cepat semua fitur worker dari dalam kontainer:
-    docker compose exec worker python selftest.py
-Membuat berkas uji dengan ffmpeg, memanggil tiap rute, lalu mencetak LULUS atau GAGAL per fitur.
+Uji cepat semua fitur worker:
+    bash ctl.sh test            (atau: .venv/bin/python selftest.py)
+Membuat berkas uji, memanggil tiap rute, lalu mencetak LULUS atau GAGAL per fitur.
 """
 
 import json
@@ -15,9 +15,28 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-BASE = os.environ.get("SELFTEST_URL", f"http://127.0.0.1:{os.environ.get('PORT', '8080')}")
-KEY = os.environ.get("WORKER_KEY", "")
-FFMPEG = os.environ.get("FFMPEG_PATH", "ffmpeg")
+ROOT = Path(__file__).resolve().parent
+
+
+def _load_dotenv(path: Path) -> None:
+    if not path.is_file():
+        return
+    for raw in path.read_text("utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k, v = k.strip(), v.strip().strip('"').strip("'")
+        if k and v and k not in os.environ:
+            os.environ[k] = v
+
+
+_load_dotenv(ROOT / ".env")
+
+PORT = os.environ.get("PORT", "").strip() or "8080"
+BASE = os.environ.get("SELFTEST_URL", "").strip() or f"http://127.0.0.1:{PORT}"
+KEY = os.environ.get("WORKER_KEY", "").strip()
+FFMPEG = os.environ.get("FFMPEG_PATH", "").strip() or "ffmpeg"
 ONLY = set(sys.argv[1:])
 
 results: list[tuple[str, bool, str]] = []
@@ -67,6 +86,31 @@ def fetch_file(name: str) -> int:
         return len(r.read())
 
 
+def make_text_image(dest: Path) -> None:
+    """Gambar uji OCR dengan Pillow supaya tidak bergantung pada filter drawtext di ffmpeg."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    img = Image.new("RGB", (900, 200), "white")
+    draw = ImageDraw.Draw(img)
+    font = None
+    for cand in (
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    ):
+        if Path(cand).is_file():
+            font = ImageFont.truetype(cand, 42)
+            break
+    if font is None:
+        try:
+            font = ImageFont.load_default(size=36)
+        except TypeError:
+            font = ImageFont.load_default()
+    draw.text((30, 70), "Selamat datang di yanz api 2026", fill="black", font=font)
+    img.save(dest, "PNG")
+
+
 def main() -> int:
     if not KEY:
         print("WORKER_KEY kosong.")
@@ -76,7 +120,7 @@ def main() -> int:
     quiet = [FFMPEG, "-hide_banner", "-loglevel", "error", "-y"]
     subprocess.run([*quiet, "-f", "lavfi", "-i", "testsrc=duration=5:size=640x360:rate=25", "-f", "lavfi", "-i", "sine=frequency=440:duration=5", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(video)], check=True)
     subprocess.run([*quiet, "-f", "lavfi", "-i", "testsrc=duration=1:size=600x400:rate=1", "-frames:v", "1", str(image)], check=True)
-    subprocess.run([*quiet, "-f", "lavfi", "-i", "color=white:size=900x200:duration=1:rate=1", "-vf", "drawtext=text='Selamat datang di yanz api 2026':fontsize=48:fontcolor=black:x=30:y=70", "-frames:v", "1", str(text_img)], check=True)
+    make_text_image(text_img)
     v, i, t = video.read_bytes(), image.read_bytes(), text_img.read_bytes()
     speech: dict = {}
 

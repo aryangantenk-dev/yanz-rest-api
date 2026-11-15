@@ -26,26 +26,58 @@ from urllib.parse import urljoin, urlsplit
 import aiohttp
 from aiohttp import web
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
+ROOT = Path(__file__).resolve().parent
 
-KEY = os.environ.get("WORKER_KEY", "").strip()
-PORT = int(os.environ.get("PORT", "8080"))
-DATA = Path(os.environ.get("DATA_DIR", "/data"))
+
+def _load_dotenv(path: Path) -> None:
+    """Baca worker/.env bila dijalankan langsung tanpa Docker."""
+    if not path.is_file():
+        return
+    for raw in path.read_text("utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k, v = k.strip(), v.strip().strip('"').strip("'")
+        if k and v and k not in os.environ:
+            os.environ[k] = v
+
+
+_load_dotenv(ROOT / ".env")
+
+
+def _env(name: str, default: str) -> str:
+    v = os.environ.get(name, "").strip()
+    return v if v else default
+
+
+_MODELS_BASE = Path("/models") if Path("/models").is_dir() else ROOT / ".models"
+os.environ.setdefault("REMBG_HOME", str(_MODELS_BASE / "rembg"))
+os.environ.setdefault("U2NET_HOME", str(_MODELS_BASE / "rembg"))
+os.environ.setdefault("HF_HOME", str(_MODELS_BASE / "hf"))
+os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/opt/browsers" if Path("/opt/browsers").is_dir() else str(ROOT / ".browsers"))
+
+_DEFAULT_DATA = "/data" if Path("/data").is_dir() and os.access("/data", os.W_OK) else str(ROOT / ".data")
+
+KEY = _env("WORKER_KEY", "")
+PORT = int(_env("PORT", "8080"))
+DATA = Path(_env("DATA_DIR", _DEFAULT_DATA))
 OUT = DATA / "out"
-FILE_TTL = int(os.environ.get("FILE_TTL_SEC", "3600"))
-MAX_INPUT = int(os.environ.get("MAX_INPUT_MB", "50")) * 1024 * 1024
-MAX_JOBS = int(os.environ.get("MAX_JOBS", "2"))
-MAX_QUEUE = int(os.environ.get("MAX_QUEUE", "6"))
-JOB_TIMEOUT = int(os.environ.get("JOB_TIMEOUT_SEC", "100"))
-MAX_MEDIA_SEC = int(os.environ.get("MAX_MEDIA_SEC", "600"))
-MAX_SPEECH_SEC = int(os.environ.get("MAX_SPEECH_SEC", "180"))
-WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "small")
-REMBG_MODEL = os.environ.get("REMBG_MODEL", "u2net")
-TTS_DIR = Path(os.environ.get("TTS_DIR", "/models/tts"))
-CHROMIUM = os.environ.get("CHROMIUM_PATH", "")
-FFMPEG = os.environ.get("FFMPEG_PATH", "ffmpeg")
+FILE_TTL = int(_env("FILE_TTL_SEC", "3600"))
+MAX_INPUT = int(_env("MAX_INPUT_MB", "50")) * 1024 * 1024
+MAX_JOBS = int(_env("MAX_JOBS", "2"))
+MAX_QUEUE = int(_env("MAX_QUEUE", "6"))
+JOB_TIMEOUT = int(_env("JOB_TIMEOUT_SEC", "100"))
+MAX_MEDIA_SEC = int(_env("MAX_MEDIA_SEC", "600"))
+MAX_SPEECH_SEC = int(_env("MAX_SPEECH_SEC", "180"))
+WHISPER_MODEL = _env("WHISPER_MODEL", "small")
+REMBG_MODEL = _env("REMBG_MODEL", "u2net")
+TTS_DIR = Path(_env("TTS_DIR", str(_MODELS_BASE / "tts")))
+CHROMIUM = _env("CHROMIUM_PATH", "")
+FFMPEG = _env("FFMPEG_PATH", "ffmpeg")
 # Hanya untuk pengujian lokal: izinkan alamat internal (127.0.0.1 dan sejenisnya).
-ALLOW_PRIVATE = os.environ.get("ALLOW_PRIVATE", "") == "1"
+ALLOW_PRIVATE = _env("ALLOW_PRIVATE", "") == "1"
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
@@ -145,12 +177,16 @@ class PinnedResolver(aiohttp.abc.AbstractResolver):
         self.ips = ips
 
     async def resolve(self, host, port=0, family=socket.AF_INET):
-        if host != self.host:
+        if host.lower() != self.host.lower():
             raise OSError("host tidak dikenal")
         out = []
         for ip in self.ips:
             fam = socket.AF_INET6 if ":" in ip else socket.AF_INET
+            if family not in (0, socket.AF_UNSPEC) and fam != family:
+                continue
             out.append({"hostname": host, "host": ip, "port": port, "family": fam, "proto": 0, "flags": socket.AI_NUMERICHOST})
+        if not out:
+            raise OSError("alamat IP untuk keluarga soket itu tidak tersedia")
         return out
 
     async def close(self):
@@ -349,10 +385,17 @@ async def browser():
 
         if _playwright is None:
             _playwright = await async_playwright().start()
-        opts = {"args": ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--hide-scrollbars", "--mute-audio"]}
+        opts = {"args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--hide-scrollbars", "--mute-audio"]}
         if CHROMIUM:
             opts["executable_path"] = CHROMIUM
-        _browser = await _playwright.chromium.launch(**opts)
+        try:
+            _browser = await _playwright.chromium.launch(**opts)
+        except Exception:
+            sys_bin = shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
+            if CHROMIUM or not sys_bin:
+                raise
+            opts["executable_path"] = sys_bin
+            _browser = await _playwright.chromium.launch(**opts)
         return _browser
 
 

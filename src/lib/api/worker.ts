@@ -21,11 +21,42 @@ const MAX_UPLOAD_MB = MAX_UPLOAD / 1024 / 1024;
 const DOWN = "Server pengolah untuk fitur ini sedang tidak aktif. Coba lagi beberapa menit lagi.";
 
 export function workerBase(): string {
-  return (process.env[ENV_URL] || "").trim().replace(/\/+$/, "");
+  let raw = (process.env[ENV_URL] || "").trim();
+  if (!raw) return "";
+  if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
+  return raw.replace(/\/+$/, "").replace(/\/health$/i, "");
 }
 
 export function workerConfigured(): boolean {
   return !!(workerBase() && (process.env[ENV_KEY] || "").trim());
+}
+
+export type WorkerHealth = {
+  status: "not_configured" | "connected" | "auth_error" | "unreachable";
+  version?: string;
+  jobs?: number;
+};
+
+/** Periksa sambungan dan kecocokan kunci dengan mesin worker tanpa membocorkan alamat atau kuncinya. */
+export async function pingWorker(timeoutMs = 4000): Promise<WorkerHealth> {
+  const base = workerBase();
+  const key = (process.env[ENV_KEY] || "").trim();
+  if (!base || !key) return { status: "not_configured" };
+  try {
+    const res = await fetch(`${base}/health`, {
+      headers: { "x-worker-key": key },
+      cache: "no-store",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return { status: "unreachable" };
+    const data = (await res.json().catch(() => null)) as { ok?: boolean; version?: string; jobs?: unknown[] } | null;
+    if (!data?.ok) return { status: "unreachable" };
+    // Dengan kunci yang cocok, /health menyertakan daftar `jobs`; tanpanya berarti WORKER_KEY berbeda.
+    if (!Array.isArray(data.jobs)) return { status: "auth_error", version: data.version };
+    return { status: "connected", version: data.version, jobs: data.jobs.length };
+  } catch {
+    return { status: "unreachable" };
+  }
 }
 
 /** Nama berkas hasil buatan worker: acak, jadi tidak bisa ditebak. */

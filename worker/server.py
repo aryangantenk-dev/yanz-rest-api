@@ -726,8 +726,8 @@ def find_voice() -> dict:
     if not TTS_DIR.is_dir():
         raise Fail(503, "Model suara belum terpasang di server pengolah.")
     onnx = next(iter(sorted(TTS_DIR.rglob("*.onnx"))), None)
-    tokens = next(iter(TTS_DIR.rglob("tokens.txt")), None)
-    data = next((p for p in TTS_DIR.rglob("espeak-ng-data") if p.is_dir()), None)
+    tokens = next(iter(sorted(TTS_DIR.rglob("tokens.txt"))), None)
+    data = next((p for p in sorted(TTS_DIR.rglob("espeak-ng-data")) if p.is_dir()), None)
     if not onnx or not tokens or not data:
         raise Fail(503, "Model suara belum terpasang di server pengolah.")
     return {"model": str(onnx), "tokens": str(tokens), "data_dir": str(data), "name": onnx.stem}

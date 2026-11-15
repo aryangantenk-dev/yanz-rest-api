@@ -234,6 +234,24 @@ export function LogoMark({ className, alt = BRAND_LOGO_ALT }: P & { alt?: string
   );
 }
 
+export function ChatIcon({ className }: P) {
+  return (
+    <svg {...base} width={20} height={20} className={className}>
+      <path d="M4 5h16v11H10l-5 4v-4H4z" />
+      <path d="M8 9h8M8 12.5h5" />
+    </svg>
+  );
+}
+
+export function SendIcon({ className }: P) {
+  return (
+    <svg {...base} width={20} height={20} className={className}>
+      <path d="M4 12l16-8-6 16-3-7z" />
+      <path d="M11 13l9-9" />
+    </svg>
+  );
+}
+
 export function KeyIcon({ className }: P) {
   return (
     <svg {...base} width={20} height={20} className={className}>

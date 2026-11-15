@@ -11,6 +11,7 @@ import {
   BoxIcon,
   CardIcon,
   ChartIcon,
+  ChatIcon,
   ClockIcon,
   CloseIcon,
   GiftIcon,
@@ -41,6 +42,7 @@ const MEMBER: Group = {
     { href: "/dashboard/api-key", label: "API key", icon: KeyIcon },
     { href: "/paket", label: "Paket", icon: BoxIcon },
     { href: "/dashboard/undang", label: "Undang teman", icon: GiftIcon },
+    { href: "/chat", label: "Chat global", icon: ChatIcon },
     { href: "/akun", label: "Akun", icon: UserIcon },
   ],
 };

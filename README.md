@@ -58,6 +58,7 @@ Login aktif bila tiga hal ini terpenuhi: Supabase terpasang (`supabase/schema.sq
   | `/dashboard/riwayat` | Riwayat permintaan |
   | `/dashboard/api-key` | Lihat, salin, dan ganti API key |
   | `/dashboard/undang` | Tautan referral dan hasilnya |
+  | `/chat` | Chat global untuk semua anggota |
   | `/paket` | Paket, limit tambahan, tukar kode, riwayat pesanan |
   | `/akun` | Profil: username, foto, keluar |
   | `/admin`, `/admin/akun`, `/admin/pesanan`, `/admin/kode`, `/admin/blokir-ip`, `/admin/blokir-api`, `/admin/blokir-endpoint`, `/admin/pembayaran` | Panel admin, satu halaman per bagian (hanya akun admin) |
@@ -177,6 +178,23 @@ Setiap akun punya tautan referral `https://situs/daftar?ref=KODE`, terlihat di `
 - Kode dari tautan disimpan 30 hari di cookie `yn_ref` dan hanya dipakai untuk akun yang baru dibuat (kurang dari satu jam). Akun lama tidak bisa dijadikan undangan, dan orang tidak bisa mengundang dirinya sendiri.
 - Hadiah hanya untuk pesanan yang dibayar lewat payment gateway. Paket dari admin (`setplan`, `addlimit`) dan dari kode hadiah tidak menghasilkan hadiah referral.
 - Satu pesanan hanya menghasilkan satu hadiah (tabel `api_referral_rewards`).
+
+## Chat global
+
+Halaman `/chat` (menu area anggota) adalah satu ruang obrolan untuk semua akun yang sudah masuk dan punya username. Pengunjung yang belum masuk tidak bisa membaca maupun mengirim.
+
+| Aturan | Nilai | Letak |
+| --- | --- | --- |
+| Panjang pesan | 500 karakter, 12 baris | `CHAT_MAX_LENGTH`, `CHAT_MAX_LINES` di `src/lib/chat.ts` |
+| Jeda antarpesan per akun | 3 detik | `CHAT_COOLDOWN_SEC` |
+| Pesan per akun per menit | 10 | `CHAT_PER_MINUTE` |
+| Pesan yang disimpan | 1.000 terakhir | `CHAT_KEEP` |
+
+- Pesan ditampilkan sebagai teks biasa (tanpa HTML, tautan tidak dibuat bisa diklik). Pesan yang memuat API key (`yn-…`) ditolak.
+- Pemilik bisa menghapus pesannya sendiri; akun admin bisa menghapus pesan siapa pun. Pesan dari akun yang dinonaktifkan tidak ditampilkan.
+- Pesan baru diambil dengan bertanya ke server tiap 5 detik (15 detik bila dua menit tidak ada pesan baru), dan berhenti selama tab tidak terlihat. Tidak ada sambungan terbuka, jadi tetap berjalan di hosting serverless.
+- Rutenya `/api/chat/messages`, `/api/chat/send`, `/api/chat/delete`: memakai sesi login (bukan API key) dan tidak mengurangi kuota.
+- Datanya di tabel `api_chat_messages` dengan fungsi `chat_list`, `chat_post`, `chat_delete` (bagian "Chat global" di `supabase/schema.sql`).
 
 ## Batas pemakaian dan blokir IP
 

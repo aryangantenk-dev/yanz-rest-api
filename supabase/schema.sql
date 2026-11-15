@@ -1652,3 +1652,133 @@ revoke all on function public.ref_summary(uuid) from public, anon, authenticated
 grant execute on function public.ref_attach(uuid, text) to service_role;
 grant execute on function public.ref_reward(text, integer) to service_role;
 grant execute on function public.ref_summary(uuid) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Chat global: satu ruang obrolan untuk semua anggota (halaman /chat).
+-- Pesan yang dihapus hanya ditandai (deleted_at), supaya browser lain tahu harus membuangnya.
+-- ---------------------------------------------------------------------------
+create table if not exists public.api_chat_messages (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references public.api_users(id) on delete cascade,
+  body text not null check (char_length(body) between 1 and 500),
+  created_at timestamptz not null default now(),
+  deleted_at timestamptz,
+  deleted_by uuid references public.api_users(id) on delete set null
+);
+
+create index if not exists api_chat_messages_user_idx on public.api_chat_messages (user_id, created_at desc);
+create index if not exists api_chat_messages_deleted_idx on public.api_chat_messages (deleted_at) where deleted_at is not null;
+
+alter table public.api_chat_messages enable row level security;
+revoke all on table public.api_chat_messages from anon, authenticated;
+grant all on table public.api_chat_messages to service_role;
+
+-- Pesan untuk akun p_user. p_after = 0: p_limit pesan terakhir. p_after > 0: pesan yang lebih baru
+-- dari id itu, ditambah id pesan lama yang dihapus dalam 10 menit terakhir ('removed').
+-- null bila akunnya tidak ada atau dinonaktifkan. Pesan dari akun yang dinonaktifkan tidak ikut.
+create or replace function public.chat_list(p_user uuid, p_after bigint, p_limit integer)
+returns json
+language plpgsql
+stable
+set search_path = ''
+as $$
+declare
+  lim integer := least(greatest(coalesce(p_limit, 50), 1), 100);
+  after_id bigint := greatest(coalesce(p_after, 0), 0);
+begin
+  if not exists (select 1 from public.api_users u where u.id = p_user and not u.banned) then
+    return null;
+  end if;
+  return json_build_object(
+    'messages', (
+      select coalesce(json_agg(t order by t.id), '[]'::json) from (
+        select m.id, m.body, m.created_at as at, u.username, u.photo, u.is_admin as admin
+        from public.api_chat_messages m
+        join public.api_users u on u.id = m.user_id
+        where m.deleted_at is null and not u.banned and m.id > after_id
+        order by m.id desc
+        limit lim
+      ) t
+    ),
+    'removed', (
+      select coalesce(json_agg(m.id), '[]'::json) from public.api_chat_messages m
+      where after_id > 0 and m.deleted_at > now() - interval '10 minutes' and m.id <= after_id
+    )
+  );
+end;
+$$;
+
+-- Kirim pesan. status: 'ok' (dengan 'message'), 'none' (akun tidak ada, dinonaktifkan, atau belum
+-- punya username), 'invalid' (kosong atau terlalu panjang), 'cooldown' (jeda antarpesan belum lewat),
+-- 'limit' (terlalu banyak pesan dalam satu menit). 'wait' berisi detik sampai boleh mengirim lagi.
+-- Hanya p_keep pesan terakhir yang disimpan; yang lebih lama dihapus.
+create or replace function public.chat_post(p_user uuid, p_body text, p_cooldown integer, p_per_minute integer, p_keep integer)
+returns json
+language plpgsql
+set search_path = ''
+as $$
+declare
+  u public.api_users;
+  txt text := btrim(coalesce(p_body, ''));
+  last_at timestamptz;
+  first_at timestamptz;
+  recent integer;
+  new_id bigint;
+  new_at timestamptz;
+begin
+  -- Kunci baris akun supaya dua kiriman bersamaan dari akun yang sama diperiksa bergantian.
+  select * into u from public.api_users where id = p_user for update;
+  if not found or u.banned or coalesce(u.username, '') = '' then
+    return json_build_object('status', 'none');
+  end if;
+  if char_length(txt) < 1 or char_length(txt) > 500 then
+    return json_build_object('status', 'invalid');
+  end if;
+
+  select max(m.created_at), min(m.created_at), count(*) into last_at, first_at, recent
+  from public.api_chat_messages m
+  where m.user_id = p_user and m.created_at > now() - interval '1 minute';
+
+  if last_at is not null and last_at + make_interval(secs => greatest(p_cooldown, 0)) > now() then
+    return json_build_object('status', 'cooldown', 'wait',
+      greatest(1, ceil(extract(epoch from (last_at + make_interval(secs => p_cooldown) - now())))::integer));
+  end if;
+  if recent >= greatest(p_per_minute, 1) then
+    return json_build_object('status', 'limit', 'wait',
+      greatest(1, ceil(extract(epoch from (first_at + interval '1 minute' - now())))::integer));
+  end if;
+
+  -- Pesan disimpan bergantian, satu per satu, supaya urutan id sama dengan urutan tersimpannya.
+  -- Browser hanya meminta pesan dengan id lebih besar dari yang terakhir dilihatnya; tanpa kunci ini
+  -- pesan ber-id lebih kecil bisa tersimpan belakangan dan terlewat.
+  perform pg_advisory_xact_lock(hashtext('public.api_chat_messages'));
+  insert into public.api_chat_messages (user_id, body) values (p_user, txt) returning id, created_at into new_id, new_at;
+  delete from public.api_chat_messages where id <= new_id - greatest(p_keep, 100);
+
+  return json_build_object('status', 'ok', 'message', json_build_object(
+    'id', new_id, 'body', txt, 'at', new_at, 'username', u.username, 'photo', u.photo, 'admin', u.is_admin));
+end;
+$$;
+
+-- Hapus pesan. Pemilik boleh menghapus pesannya sendiri; admin boleh menghapus pesan siapa pun.
+-- false bila pesannya tidak ada, sudah dihapus, atau p_by tidak berhak.
+create or replace function public.chat_delete(p_id bigint, p_by uuid)
+returns boolean
+language plpgsql
+set search_path = ''
+as $$
+begin
+  update public.api_chat_messages m
+  set deleted_at = now(), deleted_by = p_by
+  where m.id = p_id and m.deleted_at is null
+    and exists (select 1 from public.api_users a where a.id = p_by and not a.banned and (a.id = m.user_id or a.is_admin));
+  return found;
+end;
+$$;
+
+revoke all on function public.chat_list(uuid, bigint, integer) from public, anon, authenticated;
+revoke all on function public.chat_post(uuid, text, integer, integer, integer) from public, anon, authenticated;
+revoke all on function public.chat_delete(bigint, uuid) from public, anon, authenticated;
+grant execute on function public.chat_list(uuid, bigint, integer) to service_role;
+grant execute on function public.chat_post(uuid, text, integer, integer, integer) to service_role;
+grant execute on function public.chat_delete(bigint, uuid) to service_role;

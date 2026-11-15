@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { refreshAuth, useAuth, type AuthUser } from "./auth-client";
+import { ApiBlockNotice } from "./api-block-notice";
 import { Avatar } from "./avatar";
 import { CopyButton } from "./client-utils";
 import { ArrowIcon, RefreshIcon, UserIcon } from "./icons";
@@ -389,6 +390,8 @@ function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
           </Link>
         </div>
       </header>
+
+      <ApiBlockNotice block={user.api_block} />
 
       <p role="status" className={error ? "border border-danger p-3 text-sm font-medium text-danger" : "sr-only"}>
         {error ?? announce}

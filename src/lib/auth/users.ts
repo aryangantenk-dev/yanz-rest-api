@@ -23,11 +23,27 @@ export type User = {
   plan_expires_at?: string | null;
   /** Akun admin: boleh membuka /admin dan tidak terkena kuota harian. */
   is_admin?: boolean;
+  /** Blokir API oleh admin: API key ditolak, tetapi akunnya masih bisa masuk ke situs. Lihat `apiBlockOf`. */
+  api_blocked?: boolean;
+  /** Akhir blokir; null berarti selamanya. */
+  api_blocked_until?: string | null;
+  api_block_reason?: string;
 };
+
+/** Blokir API yang sedang berlaku: `until` berisi waktu berakhirnya (ISO), atau null bila selamanya. */
+export type ApiBlockInfo = { until: string | null; reason: string };
+
+/** Blokir API yang masih berlaku saat ini, atau null. Blokir sementara yang sudah lewat waktunya dianggap tidak ada. */
+export function apiBlockOf(u: { api_blocked?: boolean; api_blocked_until?: string | null; api_block_reason?: string }, now = Date.now()): ApiBlockInfo | null {
+  if (u.api_blocked !== true) return null;
+  const until = u.api_blocked_until || null;
+  if (until && !(Date.parse(until) > now)) return null;
+  return { until, reason: u.api_block_reason || "" };
+}
 
 /** Bentuk akun yang boleh dikirim ke browser pemiliknya. */
 export function publicUser(u: User) {
-  return { email: u.email, name: u.name, username: u.username, photo: u.photo ? `/avatar/${u.photo}` : "", provider: u.provider, created_at: u.created_at, admin: u.is_admin === true };
+  return { email: u.email, name: u.name, username: u.username, photo: u.photo ? `/avatar/${u.photo}` : "", provider: u.provider, created_at: u.created_at, admin: u.is_admin === true, api_block: apiBlockOf(u) };
 }
 
 /**
@@ -53,7 +69,7 @@ export function userById(id: string): Promise<User | null> {
   return supabaseRpc<User | null>("auth_user", { p_id: id });
 }
 
-export type KeyOwner = { id: string; banned: boolean; plan?: string; plan_expires_at?: string | null; used_today?: number; is_admin?: boolean };
+export type KeyOwner = { id: string; banned: boolean; plan?: string; plan_expires_at?: string | null; used_today?: number; is_admin?: boolean; api_blocked?: boolean; api_blocked_until?: string | null; api_block_reason?: string };
 
 export function keyOwner(key: string): Promise<KeyOwner | null> {
   return supabaseRpc<KeyOwner | null>("auth_key_user", { p_key: key });
@@ -97,7 +113,7 @@ export async function otpCancel(email: string): Promise<void> {
   await supabaseRpc("auth_otp_cancel", { p_email: email });
 }
 
-export type AdminUsers = { total: number; users: { email: string; username: string; name: string; provider: string; banned: boolean; created_at: string; last_login_at: string; api_key: string; plan?: string; plan_expires_at?: string | null; is_admin?: boolean; used_today?: number; used_total?: number }[] };
+export type AdminUsers = { total: number; users: { email: string; username: string; name: string; provider: string; banned: boolean; created_at: string; last_login_at: string; api_key: string; plan?: string; plan_expires_at?: string | null; is_admin?: boolean; used_today?: number; used_total?: number; api_blocked?: boolean; api_blocked_until?: string | null; api_block_reason?: string }[] };
 
 export function adminUsers(limit: number): Promise<AdminUsers> {
   return supabaseRpc<AdminUsers>("auth_admin_users", { p_limit: limit });
@@ -111,4 +127,21 @@ export function setBanned(email: string, banned: boolean): Promise<boolean> {
 /** Jadikan sebuah akun admin, atau cabut status adminnya. null bila akunnya tidak ada. */
 export function setAdmin(email: string, admin: boolean): Promise<{ email: string; username: string; is_admin: boolean } | null> {
   return supabaseRpc<{ email: string; username: string; is_admin: boolean } | null>("auth_set_admin", { p_email: email, p_admin: admin });
+}
+
+export type ApiBlockSet = { email: string; username: string; api_blocked: boolean; api_blocked_until: string | null; api_block_reason: string };
+
+/**
+ * Blokir atau buka blokir API sebuah akun. `until` null berarti selamanya.
+ * null bila akunnya tidak ada, atau bila yang hendak diblokir adalah akun admin.
+ */
+export function setApiBlock(email: string, blocked: boolean, until: string | null, reason: string): Promise<ApiBlockSet | null> {
+  return supabaseRpc<ApiBlockSet | null>("auth_set_api_block", { p_email: email, p_blocked: blocked, p_until: until, p_reason: reason.slice(0, 300) });
+}
+
+export type ApiBlockedUser = { email: string; username: string; api_blocked_until: string | null; api_block_reason: string; api_blocked_at: string | null };
+
+/** Akun yang API-nya sedang diblokir (blokir sementara yang sudah berakhir tidak ikut). */
+export async function apiBlockedUsers(limit: number): Promise<ApiBlockedUser[]> {
+  return (await supabaseRpc<ApiBlockedUser[] | null>("auth_api_blocked", { p_limit: limit })) ?? [];
 }

@@ -81,7 +81,7 @@ Untuk owner (butuh `ADMIN_KEY`):
 Sebuah akun bisa dijadikan admin (kolom `api_users.is_admin`). Akun admin:
 
 - tidak terkena kuota harian, dan batas per menitnya dihitung per akun (600 per menit, atau `RATE_LIMIT_PER_MIN` kalau nilainya lebih besar); header jawabannya `x-plan: admin`,
-- bisa membuka halaman `/admin` setelah login: daftar akun (cari, atur paket, nonaktifkan dan aktifkan lagi), pesanan paket, blokir IP, blokir API, dan status pembayaran,
+- bisa membuka halaman `/admin` setelah login: daftar akun (cari, atur paket, nonaktifkan dan aktifkan lagi), pesanan paket, blokir IP, blokir API pengguna, blokir endpoint, dan status pembayaran,
 - tidak bisa dinonaktifkan lewat `userban` sebelum status adminnya dicabut.
 
 Status admin hanya bisa diberi atau dicabut dengan `ADMIN_KEY`, tidak dari halaman `/admin`:
@@ -141,9 +141,30 @@ Mengelola blokir (hanya owner, butuh `ADMIN_KEY`):
 
 Kunci juga bisa dikirim lewat header `x-admin-key`. Cara lain: hapus baris IP tersebut dari tabel `banned_ips` di Supabase.
 
-### Blokir API
+### Blokir API pengguna
 
-Admin bisa menonaktifkan satu endpoint, atau satu kategori penuh, tanpa deploy ulang; misalnya saat sumber datanya sedang rusak. Caranya lewat tab **Blokir API** di halaman `/admin`, atau:
+Admin bisa memblokir API satu akun, untuk sementara atau selamanya. Caranya lewat tab **Blokir API** di halaman `/admin` (atau tombol **Blokir API** di kartu akunnya), atau:
+
+| Endpoint | Fungsi |
+| --- | --- |
+| `/api/admin/keyblocks?key=…` | Daftar akun yang API-nya sedang diblokir. |
+| `/api/admin/keyblock?email=…&duration=7d&reason=…&key=…` | Blokir API akun itu. `duration` berupa angka dengan satuan `m`, `h`, atau `d` (mis. `30m`, `6h`, `7d`; paling lama `3650d`), atau `permanent` untuk selamanya. Tanpa `duration`, blokirnya selamanya. `reason` opsional dan tampil ke pengguna. |
+| `/api/admin/keyunblock?email=…&key=…` | Buka blokir. |
+
+Selama diblokir:
+
+- semua permintaan dengan API key akun itu dijawab `403` dengan `key_blocked: true`, `permanent`, `until`, dan `reason`; blokir sementara juga menyertakan header `retry-after`,
+- mengganti API key tidak membuka blokir, karena yang diblokir akunnya,
+- akunnya masih bisa masuk ke situs, dan halaman Dashboard serta Akun menampilkan pemberitahuan blokir beserta alasan dan waktu berakhirnya,
+- permintaan yang ditolak tidak mengurangi kuota harian.
+
+Blokir sementara berakhir sendiri pada waktunya. Memblokir ulang akun yang sama mengganti lama dan alasannya. API akun admin tidak bisa diblokir. Blokir dan pembukaan blokir berlaku paling lama satu menit kemudian, karena hasil pemeriksaan API key disimpan sebentar di tiap server.
+
+Ini berbeda dengan `userban`, yang menonaktifkan akunnya sekaligus (tanpa batas waktu dan tanpa alasan).
+
+### Blokir endpoint
+
+Admin bisa menonaktifkan satu endpoint, atau satu kategori penuh, tanpa deploy ulang; misalnya saat sumber datanya sedang rusak. Caranya lewat tab **Blokir endpoint** di halaman `/admin`, atau:
 
 | Endpoint | Fungsi |
 | --- | --- |

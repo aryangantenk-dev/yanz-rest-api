@@ -16,9 +16,10 @@ const VALID_TTL_MS = 60_000;
 const INVALID_TTL_MS = 30_000;
 const MAX_ENTRIES = 20_000;
 
-export type KeyVerdict = "ok" | "invalid" | "banned" | "error";
+export type KeyVerdict = "ok" | "invalid" | "banned" | "blocked" | "error";
 type Entry = {
-  verdict: Exclude<KeyVerdict, "error">;
+  /** "blocked" tidak disimpan di sini: blokir API dihitung dari `blocked` dan `blockedUntil` saat key dipakai. */
+  verdict: Exclude<KeyVerdict, "error" | "blocked">;
   id: string | null;
   exp: number;
   /** Id paket di database dan akhir masa aktifnya (ms; 0 bila tidak ada). */
@@ -26,6 +27,10 @@ type Entry = {
   planExp: number;
   /** Akun admin: tanpa kuota harian, batas per menitnya dihitung per akun. */
   admin: boolean;
+  /** Blokir API oleh admin. `blockedUntil` 0 berarti selamanya; selain itu waktu berakhirnya (ms). */
+  blocked: boolean;
+  blockedUntil: number;
+  blockReason: string;
   /** Permintaan yang sudah dipakai pada hari `day` (nomor hari menurut WIB). */
   used: number;
   day: number;
@@ -49,13 +54,20 @@ export function keyFromRequest(req: Request, sp: URLSearchParams): string {
   return bearer ? bearer[1] : "";
 }
 
+/** Blokir API di entri ini masih berlaku. Blokir sementara berakhir sendiri tepat pada waktunya, tanpa menunggu cache. */
+const blockedNow = (e: Entry, now: number) => e.verdict === "ok" && e.blocked && (e.blockedUntil === 0 || e.blockedUntil > now);
+const verdictOf = (e: Entry, now: number): KeyVerdict => (blockedNow(e, now) ? "blocked" : e.verdict);
+
 export async function verifyKey(key: string): Promise<KeyVerdict> {
   if (!KEY_RE.test(key)) return "invalid";
   const now = Date.now();
   const hit = cache.get(key);
   // Lewat tengah malam WIB angka pemakaian di cache sudah tidak berlaku, jadi dibaca ulang.
-  if (hit && hit.exp > now && hit.day === wibDay(now)) return hit.verdict;
+  if (hit && hit.exp > now && hit.day === wibDay(now)) return verdictOf(hit, now);
   let verdict: Entry["verdict"];
+  let blocked = false;
+  let blockedUntil = 0;
+  let blockReason = "";
   let id: string | null = null;
   let plan = "free";
   let planExp = 0;
@@ -69,16 +81,26 @@ export async function verifyKey(key: string): Promise<KeyVerdict> {
     planExp = owner?.plan_expires_at ? Date.parse(owner.plan_expires_at) || 0 : 0;
     used = Math.max(0, Math.floor(Number(owner?.used_today) || 0));
     admin = owner?.is_admin === true;
+    blocked = owner?.api_blocked === true;
+    blockedUntil = owner?.api_blocked_until ? Date.parse(owner.api_blocked_until) || 0 : 0;
+    blockReason = owner?.api_block_reason || "";
   } catch {
     // Database tidak bisa dihubungi: pakai jawaban terakhir bila ada, selain itu tolak dulu.
-    return hit ? hit.verdict : "error";
+    return hit ? verdictOf(hit, now) : "error";
   }
   if (cache.size >= MAX_ENTRIES) {
     for (const [k, v] of cache) if (v.exp <= now) cache.delete(k);
     if (cache.size >= MAX_ENTRIES) cache.clear();
   }
-  cache.set(key, { verdict, id, exp: now + (verdict === "ok" ? VALID_TTL_MS : INVALID_TTL_MS), plan, planExp, admin, used, day: wibDay(now) });
-  return verdict;
+  const entry: Entry = { verdict, id, exp: now + (verdict === "ok" ? VALID_TTL_MS : INVALID_TTL_MS), plan, planExp, admin, blocked, blockedUntil, blockReason, used, day: wibDay(now) };
+  cache.set(key, entry);
+  return verdictOf(entry, now);
+}
+
+/** Rincian blokir API untuk key yang baru saja dijawab "blocked" oleh `verifyKey`. `until` 0 berarti selamanya. */
+export function keyBlock(key: string): { until: number; reason: string } | null {
+  const hit = cache.get(key);
+  return hit && blockedNow(hit, Date.now()) ? { until: hit.blockedUntil, reason: hit.blockReason } : null;
 }
 
 /** Paket yang berlaku untuk sebuah key menurut cache; gratis bila key belum dikenal di instance ini. */

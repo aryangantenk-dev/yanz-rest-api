@@ -7,7 +7,7 @@ import { categories } from "@/lib/api/categories";
 
 export const metadata: Metadata = {
   title: "Admin",
-  description: "Panel admin: akun pengguna, pesanan paket, blokir IP, blokir API, dan status pembayaran.",
+  description: "Panel admin: akun pengguna, pesanan paket, blokir IP, blokir API pengguna, blokir endpoint, dan status pembayaran.",
   alternates: { canonical: "/admin" },
   robots: { index: false, follow: false },
 };

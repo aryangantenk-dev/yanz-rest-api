@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { refreshAuth, setSession, signOut, useAuth, type AuthUser, type SessionBody } from "./auth-client";
+import { ApiBlockNotice } from "./api-block-notice";
 import { Avatar } from "./avatar";
 import { CopyButton, useOrigin } from "./client-utils";
 import { ArrowIcon, CameraIcon, ChartIcon, EyeIcon, EyeOffIcon, LogoutIcon, RefreshIcon, TrashIcon } from "./icons";
@@ -365,6 +366,8 @@ export function AccountPanel({ fallback }: { fallback: string }) {
           </p>
         </div>
       </header>
+
+      <ApiBlockNotice block={user.api_block} />
 
       <section aria-labelledby="akun-key" className="border border-control bg-card p-4 sm:p-6">
         <h2 id="akun-key" className="font-mono text-lg font-bold">

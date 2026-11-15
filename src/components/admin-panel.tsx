@@ -20,7 +20,13 @@ type UserRow = {
   plan_expires_at?: string | null;
   used_today?: number;
   used_total?: number;
+  /** Blokir API yang sedang berlaku; `api_blocked_until` null berarti selamanya. */
+  api_blocked?: boolean;
+  api_blocked_until?: string | null;
+  api_block_reason?: string;
 };
+type KeyBlockRow = { email: string; username: string; api_blocked_until: string | null; api_block_reason: string; api_blocked_at: string | null };
+type KeyBlocks = { total: number; users: KeyBlockRow[] };
 type Users = { total: number; users: UserRow[] };
 type OrderRow = { id: string; email: string; username: string; plan: string; months: number; amount: number; total: number | null; status: string; gateway_ref: string; created_at: string; paid_at: string | null };
 type Orders = { paid: number; paid_amount: number; orders: OrderRow[] };
@@ -33,7 +39,25 @@ type ApiBlockRow = { path: string; reason: string; created_at: string | null; sc
 type ApiBlocks = { total: number; blocks: ApiBlockRow[] };
 type Payment = { plan_days: number; api_key_set: boolean; webhook_secret_set: boolean; fee_bearer: string; gateway_reachable: boolean; webhook_url: string };
 type Notice = { tone: "ok" | "danger"; text: string };
-type Tab = "akun" | "pesanan" | "blokir" | "api" | "pembayaran";
+type Tab = "akun" | "pesanan" | "blokir" | "kunci" | "api" | "pembayaran";
+
+/** Pilihan lama blokir API; nilainya dikirim apa adanya sebagai parameter `duration`. */
+const DURATIONS: { v: string; label: string }[] = [
+  { v: "1h", label: "1 jam" },
+  { v: "6h", label: "6 jam" },
+  { v: "1d", label: "1 hari" },
+  { v: "3d", label: "3 hari" },
+  { v: "7d", label: "7 hari" },
+  { v: "30d", label: "30 hari" },
+  { v: "permanent", label: "Selamanya" },
+  { v: "custom", label: "Atur sendiri" },
+];
+const UNITS: { v: "m" | "h" | "d"; label: string; minutes: number }[] = [
+  { v: "m", label: "menit", minutes: 1 },
+  { v: "h", label: "jam", minutes: 60 },
+  { v: "d", label: "hari", minutes: 1440 },
+];
+const MAX_BLOCK_MINUTES = 3650 * 1440;
 
 const OFFLINE = "Tidak dapat terhubung ke server. Periksa koneksimu, lalu coba lagi.";
 const STATUS_LABEL: Record<string, string> = { pending: "Menunggu pembayaran", paid: "Lunas", expired: "Kedaluwarsa", canceled: "Dibatalkan", failed: "Gagal dibuat" };
@@ -41,7 +65,8 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "akun", label: "Akun" },
   { id: "pesanan", label: "Pesanan" },
   { id: "blokir", label: "Blokir IP" },
-  { id: "api", label: "Blokir API" },
+  { id: "kunci", label: "Blokir API" },
+  { id: "api", label: "Blokir endpoint" },
   { id: "pembayaran", label: "Pembayaran" },
 ];
 
@@ -101,7 +126,7 @@ function Frame({ children }: { children: React.ReactNode }) {
     <div>
       <header className="mb-8">
         <h1 className="font-mono text-[2rem] font-bold leading-tight tracking-tight sm:text-[2.5rem]">Admin</h1>
-        <p className="mt-3 max-w-[60ch] text-lg text-muted">Akun pengguna, pesanan paket, blokir IP, blokir API, dan status pembayaran.</p>
+        <p className="mt-3 max-w-[60ch] text-lg text-muted">Akun pengguna, pesanan paket, blokir IP, blokir API pengguna, blokir endpoint, dan status pembayaran.</p>
       </header>
       {children}
     </div>
@@ -118,7 +143,7 @@ export function AdminPanel({
   authEnabled: boolean;
   plans: PlanOption[];
   planDays: number;
-  /** Semua endpoint dan kategorinya, untuk pilihan di tab Blokir API. */
+  /** Semua endpoint dan kategorinya, untuk pilihan di tab Blokir endpoint. */
   endpoints?: EndpointOption[];
   categories?: CategoryOption[];
 }) {
@@ -129,6 +154,12 @@ export function AdminPanel({
   const [orders, setOrders] = useState<Orders | null>(null);
   const [bans, setBans] = useState<Bans | null>(null);
   const [apiBlocks, setApiBlocks] = useState<ApiBlocks | null>(null);
+  const [keyBlocks, setKeyBlocks] = useState<KeyBlocks | null>(null);
+  const [kbWho, setKbWho] = useState("");
+  const [kbDuration, setKbDuration] = useState("1d");
+  const [kbAmount, setKbAmount] = useState("2");
+  const [kbUnit, setKbUnit] = useState<"m" | "h" | "d">("h");
+  const [kbReason, setKbReason] = useState("");
   const [apiPick, setApiPick] = useState("");
   const [apiFilter, setApiFilter] = useState("");
   const [apiReason, setApiReason] = useState("");
@@ -154,14 +185,15 @@ export function AdminPanel({
   }, []);
 
   const load = useCallback(async () => {
-    const [u, o, b, p, a] = await Promise.all([call<Users>("users"), call<Orders>("orders"), call<Bans>("bans"), call<Payment>("paket"), call<ApiBlocks>("apiblocks")]);
+    const [u, o, b, p, a, k] = await Promise.all([call<Users>("users"), call<Orders>("orders"), call<Bans>("bans"), call<Payment>("paket"), call<ApiBlocks>("apiblocks"), call<KeyBlocks>("keyblocks")]);
     if (!alive.current) return;
     if (u.result) setUsers(u.result);
     if (o.result) setOrders(o.result);
     if (b.result) setBans(b.result);
     if (p.result) setPayment(p.result);
     if (a.result) setApiBlocks(a.result);
-    setErrors({ akun: u.ok ? undefined : u.error, pesanan: o.ok ? undefined : o.error, blokir: b.ok ? undefined : b.error, api: a.ok ? undefined : a.error, pembayaran: p.ok ? undefined : p.error });
+    if (k.result) setKeyBlocks(k.result);
+    setErrors({ akun: u.ok ? undefined : u.error, pesanan: o.ok ? undefined : o.error, blokir: b.ok ? undefined : b.error, kunci: k.ok ? undefined : k.error, api: a.ok ? undefined : a.error, pembayaran: p.ok ? undefined : p.error });
     setLoading(false);
   }, []);
 
@@ -254,9 +286,30 @@ export function AdminPanel({
   const shown = users ? users.users.filter((u) => !needle || u.email.includes(needle) || u.username.toLowerCase().includes(needle) || u.name.toLowerCase().includes(needle)) : [];
   const pickedPlan = plans.find((p) => p.id === planPick);
   const daysOk = !pickedPlan?.paid || (/^\d{1,4}$/.test(daysPick) && Number(daysPick) >= 1 && Number(daysPick) <= 3650);
-  const first = users === null && orders === null && bans === null && payment === null && apiBlocks === null && Object.keys(errors).length === 0;
+  const first = users === null && orders === null && bans === null && payment === null && apiBlocks === null && keyBlocks === null && Object.keys(errors).length === 0;
 
-  // Tab Blokir API: pilihan endpoint per kategori, disaring oleh kata yang diketik admin.
+  // Tab Blokir API (pengguna): akun ditulis dengan email, atau username salah satu akun yang termuat.
+  const kbTyped = kbWho.trim().toLowerCase();
+  const kbEmail = /^[^\s@]+@[^\s@]+\.[a-z0-9-]{2,}$/.test(kbTyped) ? kbTyped : (users?.users.find((u) => u.username && u.username.toLowerCase() === kbTyped.replace(/^@/, ""))?.email ?? "");
+  const kbTarget = users?.users.find((u) => u.email === kbEmail);
+  const kbMinutes = Number(kbAmount) * (UNITS.find((x) => x.v === kbUnit)?.minutes ?? 1);
+  const kbCustomOk = kbDuration !== "custom" || (/^\d{1,7}$/.test(kbAmount) && kbMinutes >= 1 && kbMinutes <= MAX_BLOCK_MINUTES);
+  const kbSelf = !!kbEmail && kbEmail === auth.user.email;
+  const kbProblem = !kbTyped
+    ? ""
+    : !kbEmail
+      ? "Username itu tidak ada di daftar akun yang termuat. Isi alamat emailnya."
+      : kbSelf
+        ? "Kamu tidak bisa memblokir API akunmu sendiri."
+        : kbTarget?.is_admin
+          ? "API akun admin tidak bisa diblokir."
+          : !kbCustomOk
+            ? "Isi lama blokir dengan angka, paling sedikit 1 menit dan paling lama 3650 hari."
+            : "";
+  const kbReady = !!kbEmail && !kbProblem && kbCustomOk;
+  const kbLabel = kbDuration === "custom" ? `${fmt(Number(kbAmount))} ${UNITS.find((x) => x.v === kbUnit)?.label ?? ""}` : (DURATIONS.find((d) => d.v === kbDuration)?.label ?? "").toLowerCase();
+
+  // Tab Blokir endpoint: pilihan endpoint per kategori, disaring oleh kata yang diketik admin.
   const blockedNow = new Set(apiBlocks?.blocks.map((b) => b.path) ?? []);
   const apiNeedle = apiFilter.trim().toLowerCase();
   const apiGroups = categories
@@ -317,6 +370,7 @@ export function AdminPanel({
             >
               {t.label}
               {t.id === "api" && apiBlocks && apiBlocks.total > 0 ? ` (${fmt(apiBlocks.total)})` : ""}
+              {t.id === "kunci" && keyBlocks && keyBlocks.total > 0 ? ` (${fmt(keyBlocks.total)})` : ""}
               {tab === t.id && <span className="absolute inset-x-4 bottom-0 h-0.5 bg-accent" aria-hidden />}
             </button>
           ))}
@@ -349,6 +403,7 @@ export function AdminPanel({
                         <h2 className="wrap-anywhere font-mono text-base font-bold">{u.username ? `@${u.username}` : "(belum memilih username)"}</h2>
                         {u.is_admin && <Badge tone="ok">Admin</Badge>}
                         {u.banned && <Badge tone="danger">Nonaktif</Badge>}
+                        {u.api_blocked && <Badge tone="danger">API diblokir</Badge>}
                         <Badge>{planName(u.plan || "free")}</Badge>
                         {self && <span className="text-sm text-muted">akun kamu</span>}
                       </div>
@@ -380,10 +435,34 @@ export function AdminPanel({
                         </div>
                       </dl>
 
-                      <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                      {u.api_blocked && (
+                        <p className="wrap-anywhere mt-3 text-sm text-danger">
+                          API diblokir {u.api_blocked_until ? `sampai ${moment(u.api_blocked_until)}` : "selamanya"}
+                          {u.api_block_reason ? `. Alasan: ${u.api_block_reason.replace(/[.\s]+$/, "")}` : ""}.
+                        </p>
+                      )}
+
+                      <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                         <button type="button" onClick={() => setEditing(open ? null : u.email)} aria-expanded={open} className="btn btn-secondary">
                           {open ? "Batal" : "Atur paket"}
                         </button>
+                        {u.api_blocked ? (
+                          <button type="button" disabled={!!busy} onClick={() => void run(`kb:${u.email}`, "keyunblock", { email: u.email }, `Blokir API ${u.email} dibuka.`)} className="btn btn-secondary">
+                            {busy === `kb:${u.email}` ? "Membuka…" : "Buka blokir API"}
+                          </button>
+                        ) : u.is_admin || self ? null : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setKbWho(u.email);
+                              setNotice(null);
+                              setTab("kunci");
+                            }}
+                            className="btn btn-secondary"
+                          >
+                            Blokir API
+                          </button>
+                        )}
                         {u.banned ? (
                           <button type="button" disabled={!!busy} onClick={() => void run(`ban:${u.email}`, "userunban", { email: u.email }, `Akun ${u.email} diaktifkan lagi.`)} className="btn btn-secondary">
                             {busy === `ban:${u.email}` ? "Mengaktifkan…" : "Aktifkan lagi"}
@@ -554,6 +633,133 @@ export function AdminPanel({
                       </div>
                       <button type="button" disabled={!!busy} onClick={() => void run(`unban:${b.ip}`, "unban", { ip: b.ip }, `Blokir untuk ${b.ip} dibuka.`)} className="btn btn-secondary shrink-0">
                         {busy === `unban:${b.ip}` ? "Membuka…" : "Buka blokir"}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+
+          {tab === "kunci" && (
+            <section className="space-y-4">
+              <form
+                className="border border-line bg-card p-4 sm:p-6"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!kbReady) return;
+                  const params: Record<string, string> = { email: kbEmail, duration: kbDuration === "custom" ? `${Number(kbAmount)}${kbUnit}` : kbDuration };
+                  if (kbReason.trim()) params.reason = kbReason.trim();
+                  void run("keyblock", "keyblock", params, kbDuration === "permanent" ? `API ${kbEmail} diblokir selamanya.` : `API ${kbEmail} diblokir selama ${kbLabel}.`).then((ok) => {
+                    if (ok && alive.current) {
+                      setKbWho("");
+                      setKbReason("");
+                    }
+                  });
+                }}
+              >
+                <h2 className="font-mono text-lg font-bold">Blokir API pengguna</h2>
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor={`${ids}-kb-akun`} className="block text-sm font-medium">
+                      Email atau username akun
+                    </label>
+                    <input
+                      id={`${ids}-kb-akun`}
+                      value={kbWho}
+                      onChange={(e) => setKbWho(e.target.value)}
+                      list={`${ids}-kb-daftar`}
+                      placeholder="nama@email.com"
+                      autoComplete="off"
+                      autoCapitalize="none"
+                      spellCheck={false}
+                      maxLength={254}
+                      aria-invalid={!!kbProblem}
+                      aria-describedby={`${ids}-kb-help`}
+                      className="field mt-1"
+                    />
+                    <datalist id={`${ids}-kb-daftar`}>
+                      {users?.users
+                        .filter((u) => !u.is_admin)
+                        .map((u) => (
+                          <option key={u.email} value={u.email}>
+                            {u.username ? `@${u.username}` : ""}
+                          </option>
+                        ))}
+                    </datalist>
+                  </div>
+                  <div>
+                    <label htmlFor={`${ids}-kb-lama`} className="block text-sm font-medium">
+                      Lama blokir
+                    </label>
+                    <select id={`${ids}-kb-lama`} value={kbDuration} onChange={(e) => setKbDuration(e.target.value)} className="field mt-1">
+                      {DURATIONS.map((d) => (
+                        <option key={d.v} value={d.v}>
+                          {d.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                {kbDuration === "custom" && (
+                  <div className="mt-3 grid grid-cols-2 gap-3 sm:max-w-sm">
+                    <div>
+                      <label htmlFor={`${ids}-kb-angka`} className="block text-sm font-medium">
+                        Lamanya
+                      </label>
+                      <input id={`${ids}-kb-angka`} inputMode="numeric" value={kbAmount} onChange={(e) => setKbAmount(e.target.value.replace(/\D/g, "").slice(0, 7))} aria-invalid={!kbCustomOk} aria-describedby={`${ids}-kb-help`} className="field mt-1" />
+                    </div>
+                    <div>
+                      <label htmlFor={`${ids}-kb-satuan`} className="block text-sm font-medium">
+                        Satuan
+                      </label>
+                      <select id={`${ids}-kb-satuan`} value={kbUnit} onChange={(e) => setKbUnit(e.target.value as "m" | "h" | "d")} className="field mt-1">
+                        {UNITS.map((x) => (
+                          <option key={x.v} value={x.v}>
+                            {x.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                  <div>
+                    <label htmlFor={`${ids}-kb-alasan`} className="block text-sm font-medium">
+                      Alasan (opsional, tampil ke pengguna)
+                    </label>
+                    <input id={`${ids}-kb-alasan`} value={kbReason} onChange={(e) => setKbReason(e.target.value)} placeholder="mis. Spam permintaan" maxLength={300} autoComplete="off" className="field mt-1" />
+                  </div>
+                  <button type="submit" disabled={!!busy || !kbReady} className="btn btn-danger">
+                    {busy === "keyblock" ? "Memblokir…" : kbDuration === "permanent" ? "Blokir selamanya" : "Blokir sementara"}
+                  </button>
+                </div>
+                <p id={`${ids}-kb-help`} className={`mt-2 text-sm ${kbProblem ? "font-medium text-danger" : "text-muted"}`}>
+                  {kbProblem ||
+                    "API key akun yang diblokir dijawab 403 beserta alasannya, termasuk key baru bila pengguna menggantinya. Akunnya masih bisa masuk ke situs dan melihat pemberitahuan blokir. Blokir sementara berakhir sendiri; memblokir ulang akun yang sama mengganti lama dan alasannya."}
+                </p>
+              </form>
+
+              {!keyBlocks && !errors.kunci && <div className="h-32 animate-pulse bg-subtle" aria-hidden />}
+              {keyBlocks && keyBlocks.users.length === 0 && <p className="border border-line bg-card p-4 text-muted">Tidak ada akun yang API-nya sedang diblokir.</p>}
+              {keyBlocks && keyBlocks.users.length > 0 && (
+                <ul className="space-y-3">
+                  {keyBlocks.users.map((b) => (
+                    <li key={b.email} className="flex flex-col gap-3 border border-line bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <h2 className="wrap-anywhere font-mono text-base font-bold">{b.username ? `@${b.username}` : b.email}</h2>
+                          <Badge tone="danger">{b.api_blocked_until ? "Sementara" : "Selamanya"}</Badge>
+                        </div>
+                        {b.username && <p className="wrap-anywhere mt-1 text-sm text-muted">{b.email}</p>}
+                        <p className="tnum wrap-anywhere mt-1 text-sm">{b.api_blocked_until ? `Sampai ${moment(b.api_blocked_until)}` : "Tanpa batas waktu"}</p>
+                        <p className="wrap-anywhere mt-1 text-sm text-muted">
+                          {b.api_block_reason || "Tanpa alasan"}
+                          {b.api_blocked_at ? `, sejak ${moment(b.api_blocked_at)}` : ""}
+                        </p>
+                      </div>
+                      <button type="button" disabled={!!busy} onClick={() => void run(`kb:${b.email}`, "keyunblock", { email: b.email }, `Blokir API ${b.email} dibuka.`)} className="btn btn-secondary shrink-0">
+                        {busy === `kb:${b.email}` ? "Membuka…" : "Buka blokir"}
                       </button>
                     </li>
                   ))}

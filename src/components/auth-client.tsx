@@ -18,6 +18,8 @@ export type AuthUser = {
   created_at: string;
   /** Akun admin: menu Admin tampil dan halaman /admin bisa dibuka. */
   admin?: boolean;
+  /** API akun ini sedang diblokir admin: `until` waktu berakhirnya, atau null bila selamanya. */
+  api_block?: { until: string | null; reason: string } | null;
 };
 
 /** Bagian jawaban server yang menggambarkan sesi (dari /api/auth/me, verify, username, photo, regenerate). */

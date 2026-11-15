@@ -5,7 +5,7 @@ import { SITE_CREATOR, getOrigin } from "@/lib/site";
 import { recordHit } from "@/lib/stats";
 import { APPEAL_URL, OWNER_WA, RATE_LIMIT, clientIp, guard, ipBusy } from "@/lib/guard";
 import { KEY_REQUIRED } from "@/lib/auth/config";
-import { keyFromRequest, keyKnown, keyOwnerId, keyPaid, keyQuota, keyUse, verifyKey, withKeyInHtml, withKeyInLinks } from "@/lib/auth/apikey";
+import { keyBlock, keyFromRequest, keyKnown, keyOwnerId, keyPaid, keyQuota, keyUse, verifyKey, withKeyInHtml, withKeyInLinks } from "@/lib/auth/apikey";
 import { formatNumber } from "@/lib/plans";
 import { recordUsage } from "@/lib/auth/usage";
 import { endpointBlock } from "@/lib/blocks";
@@ -117,6 +117,22 @@ async function handle(req: Request, ctx: RouteCtx) {
     const verdict = await verifyKey(apiKey);
     if (verdict === "error") return fail(503, "API key belum bisa diperiksa karena server akun tidak dapat dihubungi. Coba lagi sebentar lagi.", rlHeaders);
     if (verdict === "banned") return fail(403, `API key ini dinonaktifkan oleh pemilik situs. Untuk banding, hubungi owner lewat WhatsApp ${OWNER_WA}.`, rlHeaders, { appeal: APPEAL_URL });
+    if (verdict === "blocked") {
+      // Blokir API oleh admin: sementara (ada waktu berakhirnya) atau selamanya.
+      const info = keyBlock(apiKey);
+      const until = info && info.until > 0 ? info.until : 0;
+      const reason = info?.reason ?? "";
+      const why = reason ? ` Alasan: ${reason.replace(/[.\s]+$/, "")}.` : "";
+      const when = until ? `${new Date(until).toLocaleString("id-ID", { timeZone: "Asia/Jakarta", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })} WIB` : "";
+      return fail(
+        403,
+        until
+          ? `API key ini diblokir sementara oleh admin sampai ${when}.${why} Setelah itu key bisa dipakai lagi. Untuk banding, hubungi owner lewat WhatsApp ${OWNER_WA}.`
+          : `API key ini diblokir permanen oleh admin.${why} Untuk banding, hubungi owner lewat WhatsApp ${OWNER_WA}.`,
+        until ? { ...rlHeaders, "retry-after": String(Math.max(1, Math.ceil((until - Date.now()) / 1000))) } : rlHeaders,
+        { key_blocked: true, permanent: !until, until: until ? new Date(until).toISOString() : null, reason, appeal: APPEAL_URL },
+      );
+    }
     if (verdict !== "ok") {
       return fail(403, `API key tidak valid atau sudah diganti. Lihat API key kamu yang berlaku di ${origin}/akun.`, rlHeaders, { login: `${origin}/login` });
     }

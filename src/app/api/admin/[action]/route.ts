@@ -7,7 +7,7 @@ import { AUTH_BASE_READY, AUTH_ENABLED } from "@/lib/auth/config";
 import { forgetAllKeys } from "@/lib/auth/apikey";
 import { sameSite } from "@/lib/auth/origin";
 import { sessionUserId } from "@/lib/auth/session";
-import { adminUsers, normalizeEmail, setAdmin, setBanned, userById, type User } from "@/lib/auth/users";
+import { adminUsers, apiBlockedUsers, normalizeEmail, setAdmin, setApiBlock, setBanned, userById, type User } from "@/lib/auth/users";
 import { adminOrders, adminSetPlan } from "@/lib/billing/orders";
 import { FEE_ON_CUSTOMER, GATEWAY_READY, WEBHOOK_READY, pingGateway } from "@/lib/billing/welper";
 import { PLANS, PLAN_DAYS, planById } from "@/lib/plans";
@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 /**
- * Endpoint khusus owner dan akun admin untuk mengelola blokir IP, blokir API, gambar unggahan, akun pengguna, dan paket.
+ * Endpoint khusus owner dan akun admin untuk mengelola blokir IP, blokir API pengguna, blokir endpoint, gambar unggahan, akun pengguna, dan paket.
  *   /api/admin/bans?key=ADMIN_KEY               daftar IP yang diblokir
  *   /api/admin/unban?ip=1.2.3.4&key=ADMIN_KEY   buka blokir
  *   /api/admin/ban?ip=1.2.3.4&reason=..&key=..  blokir manual
@@ -29,6 +29,10 @@ export const runtime = "nodejs";
  *   /api/admin/users?key=ADMIN_KEY              100 akun terbaru (API key disamarkan)
  *   /api/admin/userban?email=..&key=ADMIN_KEY   nonaktifkan akun beserta API key-nya
  *   /api/admin/userunban?email=..&key=..        aktifkan lagi
+ *   /api/admin/keyblocks?key=ADMIN_KEY          akun yang API-nya sedang diblokir
+ *   /api/admin/keyblock?email=..&duration=7d&reason=..&key=..   blokir API sebuah akun: API key-nya ditolak, akunnya masih bisa masuk.
+ *                                                        duration: 30m, 6h, 7d (menit/jam/hari), atau permanent (bawaan)
+ *   /api/admin/keyunblock?email=..&key=..       buka blokir API
  *   /api/admin/setplan?email=..&plan=pro&days=30&key=..   beri paket tanpa pembayaran (menambah masa aktif);
  *                                                        plan=free mengembalikan akun ke paket gratis
  *   /api/admin/orders?key=ADMIN_KEY             100 pesanan paket terbaru dan total yang lunas
@@ -50,6 +54,19 @@ function keyMatches(given: string) {
   const a = Buffer.from(given);
   const b = Buffer.from(key);
   return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
+ * Lama blokir API dari parameter `duration`, dalam milidetik. 0 berarti selamanya (juga bila
+ * parameternya kosong); null bila bentuknya salah atau di luar rentang 1 menit sampai 3650 hari.
+ */
+function blockSpan(raw: string | null): number | null {
+  const s = (raw || "").trim().toLowerCase();
+  if (!s || s === "permanent" || s === "permanen" || s === "selamanya" || s === "forever") return 0;
+  const m = /^(\d{1,7})\s*(m|h|d)$/.exec(s);
+  if (!m) return null;
+  const ms = Number(m[1]) * (m[2] === "m" ? 60_000 : m[2] === "h" ? 3_600_000 : 86_400_000);
+  return ms >= 60_000 && ms <= 3650 * 86_400_000 ? ms : null;
 }
 
 /** Siapa yang memanggil: pemegang ADMIN_KEY, atau akun admin yang sedang masuk. */
@@ -133,8 +150,33 @@ export async function GET(req: Request, ctx: { params: Promise<{ action: string 
         },
       });
     }
-    if (action === "users" || action === "userban" || action === "userunban" || action === "setplan" || action === "orders" || action === "setadmin") {
+    if (action === "users" || action === "userban" || action === "userunban" || action === "setplan" || action === "orders" || action === "setadmin" || action === "keyblocks" || action === "keyblock" || action === "keyunblock") {
       if (!AUTH_BASE_READY) return json(503, { error: "Login belum dikonfigurasi di server ini (butuh Supabase dan AUTH_SECRET)." });
+      if (action === "keyblocks") {
+        const users = await apiBlockedUsers(200);
+        return json(200, { result: { total: users.length, users } });
+      }
+      if (action === "keyblock" || action === "keyunblock") {
+        const email = normalizeEmail(sp.get("email"));
+        if (!email) return json(400, { error: "Parameter 'email' wajib diisi dengan alamat email akun." });
+        if (action === "keyunblock") {
+          const set = await setApiBlock(email, false, null, "");
+          if (!set) return json(404, { error: "Tidak ada akun dengan email itu." });
+          forgetAllKeys();
+          return json(200, { result: { email, blocked: false, message: "Blokir API dibuka. API key akun ini kembali berfungsi paling lama satu menit lagi." } });
+        }
+        if (who.via === "session" && email === who.user.email) return json(400, { error: "Kamu tidak bisa memblokir API akunmu sendiri." });
+        const span = blockSpan(sp.get("duration"));
+        if (span === null) return json(400, { error: "Parameter 'duration' harus berupa angka dengan satuan m, h, atau d (mis. 30m, 6h, 7d; paling lama 3650d), atau 'permanent' untuk selamanya." });
+        const until = span > 0 ? new Date(Date.now() + span).toISOString() : null;
+        const reason = (sp.get("reason") || "").trim().slice(0, 300);
+        const set = await setApiBlock(email, true, until, reason);
+        if (!set) return json(404, { error: "Tidak ada akun dengan email itu, atau akun itu admin. API akun admin tidak bisa diblokir sebelum status adminnya dicabut." });
+        forgetAllKeys();
+        return json(200, {
+          result: { email, username: set.username, blocked: true, permanent: !until, until, reason, message: `API akun ini diblokir ${until ? "sementara" : "selamanya"}. API key-nya berhenti berfungsi paling lama satu menit lagi; akunnya masih bisa masuk ke situs.` },
+        });
+      }
       if (action === "setadmin") {
         // Hanya pemegang ADMIN_KEY yang boleh menambah atau mencabut admin; akun admin tidak bisa mengangkat admin lain.
         if (who.via !== "key") return json(403, { error: "Status admin hanya bisa diubah dengan ADMIN_KEY." });
@@ -184,7 +226,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ action: string 
       await adminBan(ip, reason);
       return json(200, { result: { ip, banned: true, reason } });
     }
-    return json(404, { error: "Aksi tidak dikenal. Gunakan: bans, ban, unban, apiblocks, apiblock, apiunblock, images, delimage, users, userban, userunban, setplan, setadmin, orders, paket." });
+    return json(404, { error: "Aksi tidak dikenal. Gunakan: bans, ban, unban, keyblocks, keyblock, keyunblock, apiblocks, apiblock, apiunblock, images, delimage, users, userban, userunban, setplan, setadmin, orders, paket." });
   } catch (e) {
     console.error("[api/admin]", e);
     return json(502, { error: "Gagal menghubungi database atau penyimpanan." });

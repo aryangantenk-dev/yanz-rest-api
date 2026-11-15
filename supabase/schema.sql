@@ -926,3 +926,125 @@ alter table public.blocked_endpoints enable row level security;
 -- Hanya server (service role) yang membaca dan mengubah tabel ini.
 revoke all on table public.blocked_endpoints from anon, authenticated;
 grant select, insert, update, delete on table public.blocked_endpoints to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Blokir API pengguna
+-- Admin bisa memblokir API sebuah akun untuk sementara (api_blocked_until terisi) atau selamanya
+-- (api_blocked_until null). Selama diblokir API key akun itu ditolak (403), tetapi akunnya masih
+-- bisa masuk ke situs. Berbeda dengan `banned`, yang menonaktifkan akunnya sekaligus.
+-- Kelola lewat halaman /admin, atau /api/admin/keyblocks, keyblock, keyunblock.
+-- Fungsi auth_user_json, auth_key_user, dan auth_admin_users di bawah ini menggantikan versi di atas.
+-- ---------------------------------------------------------------------------
+
+alter table public.api_users
+  add column if not exists api_blocked boolean not null default false,
+  add column if not exists api_blocked_until timestamptz,
+  add column if not exists api_block_reason text not null default '',
+  add column if not exists api_blocked_at timestamptz;
+
+create or replace function public.auth_user_json(u public.api_users)
+returns json
+language sql
+immutable
+set search_path = ''
+as $$
+  select json_build_object(
+    'id', u.id, 'email', u.email, 'name', u.name, 'avatar', u.avatar, 'provider', u.provider,
+    'username', coalesce(u.username, ''), 'photo', u.photo,
+    'api_key', u.api_key, 'banned', u.banned, 'created_at', u.created_at, 'last_login_at', u.last_login_at,
+    'plan', u.plan, 'plan_expires_at', u.plan_expires_at, 'is_admin', u.is_admin,
+    'api_blocked', u.api_blocked, 'api_blocked_until', u.api_blocked_until, 'api_block_reason', u.api_block_reason
+  );
+$$;
+
+create or replace function public.auth_key_user(p_key text)
+returns json
+language sql
+stable
+set search_path = ''
+as $$
+  select json_build_object(
+    'id', u.id, 'banned', u.banned, 'is_admin', u.is_admin,
+    'api_blocked', u.api_blocked, 'api_blocked_until', u.api_blocked_until, 'api_block_reason', u.api_block_reason,
+    'plan', case when u.plan <> 'free' and u.plan_expires_at > now() then u.plan else 'free' end,
+    'plan_expires_at', u.plan_expires_at,
+    'used_today', coalesce((
+      select sum(a.hits) from public.api_usage a
+      where a.user_id = u.id and a.day = (now() at time zone 'Asia/Jakarta')::date
+    ), 0)
+  )
+  from public.api_users u where u.api_key = p_key;
+$$;
+
+-- Blokir atau buka blokir API sebuah akun. p_until null berarti selamanya.
+-- Mengembalikan null bila akunnya tidak ada, atau bila yang hendak diblokir adalah akun admin.
+create or replace function public.auth_set_api_block(p_email text, p_blocked boolean, p_until timestamptz, p_reason text)
+returns json
+language plpgsql
+set search_path = ''
+as $$
+declare
+  u public.api_users;
+begin
+  update public.api_users set
+    api_blocked = p_blocked,
+    api_blocked_until = case when p_blocked then p_until else null end,
+    api_block_reason = case when p_blocked then left(coalesce(p_reason, ''), 300) else '' end,
+    api_blocked_at = case when p_blocked then now() else null end
+  where email = lower(p_email) and not (p_blocked and is_admin)
+  returning * into u;
+  if not found then
+    return null;
+  end if;
+  return json_build_object(
+    'email', u.email, 'username', coalesce(u.username, ''),
+    'api_blocked', u.api_blocked, 'api_blocked_until', u.api_blocked_until, 'api_block_reason', u.api_block_reason
+  );
+end;
+$$;
+
+-- Untuk owner dan admin (/api/admin/keyblocks): akun yang API-nya sedang diblokir.
+-- Blokir sementara yang sudah lewat waktunya tidak ikut.
+create or replace function public.auth_api_blocked(p_limit integer)
+returns json
+language sql
+stable
+set search_path = ''
+as $$
+  select coalesce(json_agg(t), '[]'::json) from (
+    select u.email, coalesce(u.username, '') as username, u.api_blocked_until, u.api_block_reason, u.api_blocked_at
+    from public.api_users u
+    where u.api_blocked and (u.api_blocked_until is null or u.api_blocked_until > now())
+    order by u.api_blocked_at desc nulls last
+    limit greatest(1, least(p_limit, 500))
+  ) t;
+$$;
+
+-- Untuk owner dan admin (/api/admin/users): akun terbaru, API key disamarkan, beserta paket, pemakaian, dan blokir API-nya.
+create or replace function public.auth_admin_users(p_limit integer)
+returns json
+language sql
+stable
+set search_path = ''
+as $$
+  select json_build_object(
+    'total', (select count(*) from public.api_users),
+    'users', (
+      select coalesce(json_agg(t), '[]'::json) from (
+        select u.email, coalesce(u.username, '') as username, u.name, u.provider, u.banned, u.is_admin, u.created_at, u.last_login_at,
+               left(u.api_key, 7) || '…' || right(u.api_key, 4) as api_key,
+               case when u.plan <> 'free' and u.plan_expires_at > now() then u.plan else 'free' end as plan, u.plan_expires_at,
+               coalesce((select sum(a.hits) from public.api_usage a where a.user_id = u.id and a.day = (now() at time zone 'Asia/Jakarta')::date), 0) as used_today,
+               coalesce((select x.hits from public.api_usage_totals x where x.user_id = u.id), 0) as used_total,
+               (u.api_blocked and (u.api_blocked_until is null or u.api_blocked_until > now())) as api_blocked,
+               u.api_blocked_until, u.api_block_reason
+        from public.api_users u order by u.created_at desc limit greatest(1, least(p_limit, 500))
+      ) t
+    )
+  );
+$$;
+
+revoke all on function public.auth_set_api_block(text, boolean, timestamptz, text) from public, anon, authenticated;
+grant execute on function public.auth_set_api_block(text, boolean, timestamptz, text) to service_role;
+revoke all on function public.auth_api_blocked(integer) from public, anon, authenticated;
+grant execute on function public.auth_api_blocked(integer) to service_role;

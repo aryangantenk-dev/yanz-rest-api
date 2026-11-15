@@ -368,6 +368,8 @@ Wants=network-online.target
 Type=simple
 User=${UNIT_USER}
 WorkingDirectory=${DIR}
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
 ExecStart=${DIR}/.venv/bin/python ${DIR}/server.py
 Restart=always
 RestartSec=2
@@ -377,8 +379,25 @@ WantedBy=multi-user.target
 UNIT
     as_root systemctl daemon-reload
     as_root systemctl enable yanz-worker >/dev/null 2>&1 || true
-    as_root systemctl restart yanz-worker
-    bash "$DIR/ctl.sh" status >/dev/null
+    as_root systemctl restart yanz-worker || true
+
+    # Tunggu sampai port benar-benar menjawab (systemd butuh beberapa detik).
+    up=0
+    for _ in $(seq 1 60); do
+      if curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
+        up=1
+        break
+      fi
+      sleep 1
+    done
+    if [ "$up" = 1 ]; then
+      echo "      Layanan systemd 'yanz-worker' aktif dan menjawab di port ${PORT}."
+    else
+      echo "      Layanan belum menjawab. 20 baris log terakhir:" >&2
+      as_root journalctl -u yanz-worker -n 20 --no-pager 2>/dev/null || true
+      echo "      Mencoba menyalakan lewat ctl.sh sebagai cadangan..." >&2
+      bash "$DIR/ctl.sh" restart || true
+    fi
   else
     bash "$DIR/ctl.sh" restart
     if [ -n "${HOME:-}" ] && [ -d "${HOME:-}" ]; then
@@ -392,6 +411,10 @@ UNIT
   echo
   echo "Menguji semua fitur (1 sampai 3 menit)..."
   bash "$DIR/ctl.sh" test || echo "Catatan: ada fitur yang belum lulus uji di atas. Lihat log dengan: bash ctl.sh logs"
+
+  # Ringkasan singkat supaya langsung kelihatan sudah jalan atau belum.
+  echo
+  bash "$DIR/ctl.sh" status || true
 }
 
 install_docker() {

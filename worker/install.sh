@@ -52,42 +52,61 @@ fi
 if [ -z "$SELF_DIR" ] || [ ! -f "$SELF_DIR/server.py" ] || [ ! -f "$SELF_DIR/ctl.sh" ]; then
   reclaim_docker_space_if_low
   REPO_URL="${YANZ_REPO:-https://github.com/aryangantenk-dev/yanz-rest-api.git}"
-  REPO_BRANCH="${YANZ_BRANCH:-main}"
-  if [ -n "${YANZ_DIR:-}" ]; then
-    TARGET_DIR="$YANZ_DIR"
-  elif git rev-parse --show-toplevel >/dev/null 2>&1 && [ -d "$(git rev-parse --show-toplevel)/worker" ]; then
-    TARGET_DIR="$(git rev-parse --show-toplevel)"
-  elif [ -d "$HOME/yanz/.git" ]; then
-    TARGET_DIR="$HOME/yanz"
-    # Hapus duplikat folder lama bila ada agar hemat disk.
-    if [ -d "$HOME/yanz-rest-api" ] && [ "$TARGET_DIR" != "$HOME/yanz-rest-api" ]; then
-      rm -rf "$HOME/yanz-rest-api" 2>/dev/null || true
-    fi
-  elif [ -d "$HOME/yanz-rest-api/.git" ]; then
-    TARGET_DIR="$HOME/yanz-rest-api"
-  else
-    TARGET_DIR="$HOME/yanz"
-  fi
 
   if ! command -v git >/dev/null 2>&1; then
     echo "Memasang git..."
-    as_root apt-get update -qq
+    as_root apt-get update -qq || true
     as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates curl
   fi
-  if [ -d "$TARGET_DIR/.git" ]; then
-    echo "Memperbarui kode di $TARGET_DIR..."
-    git -C "$TARGET_DIR" fetch --depth 1 origin "$REPO_BRANCH"
-    git -C "$TARGET_DIR" checkout -f FETCH_HEAD
+
+  # Cari checkout git yang sudah ada (jangan menghapus folder pengguna).
+  TARGET_DIR=""
+  if [ -n "${YANZ_DIR:-}" ]; then
+    TARGET_DIR="$YANZ_DIR"
   else
-    echo "Mengunduh yanz-worker ke $TARGET_DIR..."
-    rm -rf "$TARGET_DIR"
-    git clone --depth 1 -b "$REPO_BRANCH" "$REPO_URL" "$TARGET_DIR"
+    for cand in "$(git rev-parse --show-toplevel 2>/dev/null || true)" "$HOME/yanz" "$HOME/yanz-rest-api"; do
+      [ -n "$cand" ] || continue
+      if [ -d "$cand/.git" ]; then
+        TARGET_DIR="$cand"
+        break
+      fi
+    done
   fi
-  if [ -z "${YANZ_BRANCH:-}" ] && git -C "$TARGET_DIR" fetch --depth 1 origin arena/f8aec1ff-yanz-rest-api >/dev/null 2>&1; then
-    # Selama PR branch ini belum di-merge ke main, ambil versi terbaru dari branch ini.
-    if ! git -C "$TARGET_DIR" merge-base --is-ancestor FETCH_HEAD HEAD 2>/dev/null; then
-      git -C "$TARGET_DIR" checkout -f FETCH_HEAD
+
+  # Branch terbaru: pakai branch pengembangan bila ada, kalau tidak `main`.
+  BUMP=""
+  if [ -n "$TARGET_DIR" ] && [ -d "$TARGET_DIR/.git" ]; then
+    for cand in "${YANZ_BRANCH:-arena/f8aec1ff-yanz-rest-api}" "main"; do
+      if git -C "$TARGET_DIR" fetch --depth 1 origin "$cand" >/dev/null 2>&1; then
+        BUMP="$cand"
+        break
+      fi
+    done
+    if [ -n "$BUMP" ]; then
+      echo "Memperbarui kode di $TARGET_DIR (branch $BUMP)..."
+      git -C "$TARGET_DIR" checkout -f FETCH_HEAD >/dev/null 2>&1 || git -C "$TARGET_DIR" checkout -f FETCH_HEAD
+    else
+      echo "Tidak bisa menghubungi GitHub. Memakai kode yang sudah ada di $TARGET_DIR." >&2
     fi
+  fi
+
+  if [ -z "$TARGET_DIR" ]; then
+    TARGET_DIR="$HOME/yanz"
+    if [ -e "$TARGET_DIR" ] && [ -n "$(ls -A "$TARGET_DIR" 2>/dev/null)" ]; then
+      TARGET_DIR="$HOME/yanz-rest-api"
+    fi
+    for cand in "${YANZ_BRANCH:-arena/f8aec1ff-yanz-rest-api}" main; do
+      echo "Mengunduh yanz-worker ke $TARGET_DIR (branch $cand)..."
+      if git clone --depth 1 -b "$cand" "$REPO_URL" "$TARGET_DIR"; then
+        break
+      fi
+      rm -rf "$TARGET_DIR"
+    done
+  fi
+
+  if [ ! -f "$TARGET_DIR/worker/install.sh" ]; then
+    echo "Gagal mendapatkan kode yanz-rest-api di $TARGET_DIR." >&2
+    exit 1
   fi
   exec bash "$TARGET_DIR/worker/install.sh" "$@"
 fi

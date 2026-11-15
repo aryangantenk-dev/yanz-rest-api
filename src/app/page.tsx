@@ -13,7 +13,7 @@ import { colorizeJson } from "@/lib/highlight";
 import { RATE_LIMIT } from "@/lib/limits";
 import { KEY_REQUIRED } from "@/lib/auth/config";
 import { showcase, showcaseHost } from "@/lib/showcase";
-import { SITE_CREATOR, SITE_NAME, SITE_TAGLINE, SITE_URL } from "@/lib/site";
+import { SITE_CREATOR, SITE_NAME, SITE_TAGLINE, SITE_URL, SUPPORT_URL } from "@/lib/site";
 
 export const metadata: Metadata = {
   alternates: { canonical: "/" },
@@ -361,6 +361,27 @@ export default function Home() {
           </div>
           <a href={APPEAL_URL} target="_blank" rel="noopener" className="btn btn-secondary shrink-0">
             Hubungi lewat WhatsApp
+            <ExternalIcon />
+            <span className="sr-only">(terbuka di tab baru)</span>
+          </a>
+        </div>
+      </section>
+
+      {/* ───────── Dukung ───────── */}
+      <section id="dukung" className="border-t border-line bg-card">
+        <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-16 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:py-20">
+          <div>
+            <h2 className="font-mono text-2xl font-bold tracking-tight sm:text-[2rem]">Suka dengan {SITE_NAME}?</h2>
+            <p className="mt-3 max-w-[60ch] text-muted">
+              Dukung di{" "}
+              <a href={SUPPORT_URL} target="_blank" rel="noopener" className="link font-medium text-fg">
+                sociabuzz.com/vibeyan/tribe
+                <span className="sr-only"> (terbuka di tab baru)</span>
+              </a>
+            </p>
+          </div>
+          <a href={SUPPORT_URL} target="_blank" rel="noopener" className="btn btn-primary shrink-0">
+            Dukung di SociaBuzz
             <ExternalIcon />
             <span className="sr-only">(terbuka di tab baru)</span>
           </a>

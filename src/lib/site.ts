@@ -4,6 +4,8 @@ export const SITE_NAME = "yanz.api";
 /** Nilai field `creator` pada setiap respons JSON. */
 export const SITE_CREATOR = "yanz.api";
 /** Kalimat pendek pembeda: berubah begitu API key diwajibkan (login aktif). */
+/** Halaman dukungan (SociaBuzz Tribe) milik pemilik situs. */
+export const SUPPORT_URL = "https://sociabuzz.com/vibeyan/tribe";
 export const SITE_PITCH = KEY_REQUIRED ? "gratis dengan API key" : "gratis tanpa API key";
 export const SITE_TAGLINE = KEY_REQUIRED ? "REST API Gratis untuk Developer Indonesia" : "REST API Gratis Tanpa API Key";
 export const SITE_DESCRIPTION =

@@ -88,6 +88,48 @@ function EndpointCard({ e, fallback, forceOpen, keyRequired, blocked }: { e: End
   const fullUrl = withKey(`${origin}${e.path}${query}`, shownKey);
   const missing = e.params.filter((p) => p.required && !values[p.name]?.trim());
 
+  /** Lepaskan blob gambar sebelumnya supaya memorinya tidak menumpuk. */
+  const forget = useCallback(() => {
+    if (imgRef.current) {
+      URL.revokeObjectURL(imgRef.current);
+      imgRef.current = null;
+    }
+  }, []);
+
+  /**
+   * Tampilkan respons sesuai jenis isinya. Endpoint image/video (hapus latar, stiker, ssweb)
+   * mengirim data biner; isinya harus dibaca sebagai blob lalu ditampilkan sebagai gambar.
+   * Bila dibaca sebagai teks, yang muncul deretan karakter rusak seperti "PNG IHRDR…".
+   */
+  const showResponse = useCallback(
+    async (r: Response, t0: number, frameUrl?: string) => {
+      const type = (r.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+      const ms = Math.round(performance.now() - t0);
+      forget();
+      if (r.type === "opaqueredirect") {
+        setRes({ ok: false, status: 302, ms, type: "", error: REDIRECT_FAILED });
+        return;
+      }
+      if (type.startsWith("image/") || type.startsWith("video/")) {
+        const blob = await r.blob();
+        const src = URL.createObjectURL(blob);
+        imgRef.current = src;
+        setRes({ ok: r.ok, status: r.status, ms, type, ...(type.startsWith("video/") ? { video: src } : { img: src }), size: blob.size });
+        return;
+      }
+      const raw = await r.text();
+      let text = raw;
+      try {
+        text = JSON.stringify(JSON.parse(raw), null, 2);
+      } catch {
+        /* bukan JSON: tampilkan apa adanya */
+      }
+      const frame = frameUrl && r.ok && type.startsWith("text/html") ? frameUrl : undefined;
+      setRes({ ok: r.ok, status: r.status, ms, type, text, frame, size: raw.length });
+    },
+    [forget],
+  );
+
   const send = useCallback(async () => {
     setLoading(true);
     setTab("respons");
@@ -98,12 +140,6 @@ function EndpointCard({ e, fallback, forceOpen, keyRequired, blocked }: { e: End
       return;
     }
     const url = withKey(`${e.path}${query}`, apiKey);
-    const forget = () => {
-      if (imgRef.current) {
-        URL.revokeObjectURL(imgRef.current);
-        imgRef.current = null;
-      }
-    };
     try {
       if (e.upload && file) {
         forget();
@@ -114,14 +150,8 @@ function EndpointCard({ e, fallback, forceOpen, keyRequired, blocked }: { e: End
         const form = new FormData();
         form.append(e.upload.field, file);
         const r = await fetch(withKey(e.path, apiKey), { method: "POST", body: form });
-        const raw = await r.text();
-        let text = raw;
-        try {
-          text = JSON.stringify(JSON.parse(raw), null, 2);
-        } catch {
-          /* bukan JSON, mis. halaman galat dari platform hosting */
-        }
-        setRes({ ok: r.ok, status: r.status, ms: Math.round(performance.now() - t0), type: r.headers.get("content-type") ?? "", text, size: raw.length });
+        // Hasil endpoint image bisa berupa PNG biner: jangan dibaca sebagai teks.
+        await showResponse(r, t0);
         return;
       }
       if (asksRedirect(url)) {
@@ -134,35 +164,13 @@ function EndpointCard({ e, fallback, forceOpen, keyRequired, blocked }: { e: End
         // Gambar tidak termuat: ambil jawaban API-nya supaya pesan galatnya bisa ditampilkan.
       }
       const r = await fetch(url, { redirect: "manual" });
-      const type = r.headers.get("content-type") ?? "";
-      const ms = Math.round(performance.now() - t0);
-      forget();
-      if (r.type === "opaqueredirect") {
-        setRes({ ok: false, status: 302, ms, type: "", error: REDIRECT_FAILED });
-        return;
-      }
-      if (type.startsWith("image/") || type.startsWith("video/")) {
-        const blob = await r.blob();
-        const src = URL.createObjectURL(blob);
-        imgRef.current = src;
-        setRes({ ok: r.ok, status: r.status, ms, type, ...(type.startsWith("video/") ? { video: src } : { img: src }), size: blob.size });
-      } else {
-        const raw = await r.text();
-        let text = raw;
-        try {
-          text = JSON.stringify(JSON.parse(raw), null, 2);
-        } catch {
-          /* bukan JSON */
-        }
-        const frame = r.ok && type.startsWith("text/html") ? url : undefined;
-        setRes({ ok: r.ok, status: r.status, ms, type, text, frame, size: raw.length });
-      }
+      await showResponse(r, t0, url);
     } catch {
       setRes({ ok: false, status: 0, ms: Math.round(performance.now() - t0), type: "", error: "Tidak dapat terhubung ke server. Periksa koneksimu, lalu kirim lagi." });
     } finally {
       setLoading(false);
     }
-  }, [apiKey, e.path, e.title, e.upload, file, keyRequired, query]);
+  }, [apiKey, e.path, e.title, e.upload, file, keyRequired, query, showResponse, forget]);
 
   const onSubmit = (ev: FormEvent) => {
     ev.preventDefault();

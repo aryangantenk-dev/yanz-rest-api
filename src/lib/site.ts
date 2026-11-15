@@ -8,6 +8,9 @@ export const SITE_CREATOR = "yanz.api";
 /** Kalimat pendek pembeda: berubah begitu API key diwajibkan (login aktif). */
 /** Halaman dukungan (SociaBuzz Tribe) milik pemilik situs. */
 export const SUPPORT_URL = "https://sociabuzz.com/vibeyan/tribe";
+/** Saluran WhatsApp resmi: pengumuman endpoint baru, gangguan, dan pembaruan. */
+export const WHATSAPP_CHANNEL_URL = "https://whatsapp.com/channel/0029VbDtQ7R89inbCHWpTr16";
+export const WHATSAPP_CHANNEL_NAME = "Saluran WhatsApp yanz.api";
 export const SITE_PITCH = KEY_REQUIRED ? "gratis dengan API key" : "gratis tanpa API key";
 export const SITE_TAGLINE = KEY_REQUIRED ? "REST API Gratis untuk Developer Indonesia" : "REST API Gratis Tanpa API Key";
 

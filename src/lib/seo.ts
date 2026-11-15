@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { endpoints } from "@/lib/api/registry";
 import { KEY_REQUIRED } from "@/lib/auth/config";
 import { BRAND_ALTERNATE_NAMES, BRAND_DOMAIN, BRAND_FEATURES, BRAND_KEYPHRASE, BRAND_LOGO_ALT } from "@/lib/brand";
-import { SITE_NAME, SITE_PITCH, SITE_TAGLINE, SITE_URL } from "@/lib/site";
+import { SITE_NAME, SITE_PITCH, SITE_TAGLINE, SITE_URL, WHATSAPP_CHANNEL_URL } from "@/lib/site";
 
 /*
   Judul, deskripsi, Open Graph, dan data terstruktur. Tiga kata kunci merek selalu ikut:
@@ -123,6 +123,7 @@ export function siteJsonLd() {
         url: `${SITE_URL}/`,
         logo,
         image: logo,
+        sameAs: [WHATSAPP_CHANNEL_URL],
       },
       {
         "@type": "SoftwareApplication",

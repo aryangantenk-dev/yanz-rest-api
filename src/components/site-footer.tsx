@@ -1,10 +1,10 @@
-import { SITE_PITCH } from "@/lib/site";
+import { SITE_PITCH, WHATSAPP_CHANNEL_NAME, WHATSAPP_CHANNEL_URL } from "@/lib/site";
 import Link from "next/link";
 import { categories } from "@/lib/api/categories";
 import { KEY_REQUIRED } from "@/lib/auth/config";
 import { RATE_LIMIT } from "@/lib/limits";
 import { FREE_PLAN, formatNumber } from "@/lib/plans";
-import { LogoMark } from "./icons";
+import { ChannelIcon, LogoMark } from "./icons";
 
 const linkClass = "inline-flex min-h-11 items-center text-muted transition-colors duration-150 hover:text-fg sm:min-h-8";
 
@@ -22,6 +22,16 @@ export function SiteFooter({ total }: { total: number }) {
           <p className="mt-4 max-w-[45ch] text-sm text-muted">
             {`REST API ${SITE_PITCH} untuk developer, pelajar, dan pembuat bot. ${total} endpoint, respons JSON konsisten, dan CORS terbuka.`}
           </p>
+          <a
+            href={WHATSAPP_CHANNEL_URL}
+            target="_blank"
+            rel="noopener"
+            className="mt-4 inline-flex min-h-11 items-center gap-2 rounded-full border border-line px-4 text-sm font-medium text-fg transition-colors duration-150 hover:border-ok hover:text-ok sm:min-h-9"
+          >
+            <ChannelIcon />
+            Ikuti saluran WhatsApp
+            <span className="sr-only">({WHATSAPP_CHANNEL_NAME}, terbuka di tab baru)</span>
+          </a>
         </div>
 
         <nav aria-label="Kategori API" className="md:col-span-4">

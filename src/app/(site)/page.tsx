@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import type { CSSProperties } from "react";
 import { BaseUrlBox, LiveRequests } from "@/components/client-utils";
 import { CodeTabs } from "@/components/code-tabs";
-import { ArrowIcon, CategoryIcon, ChevronIcon, ExternalIcon } from "@/components/icons";
+import { ArrowIcon, CategoryIcon, ChannelIcon, ChevronIcon, ExternalIcon } from "@/components/icons";
 import { Stagger } from "@/components/motion";
 import { TryConsole, type ConsoleEndpoint } from "@/components/try-console";
 import { categories } from "@/lib/api/categories";
@@ -16,7 +16,7 @@ import { FREE_PLAN, LIMIT_PRICE, LIMIT_STEP, PLANS, formatNumber, rupiah } from 
 import { showcase, showcaseHost } from "@/lib/showcase";
 import { BRAND_ALTERNATE_NAMES } from "@/lib/brand";
 import { HOME_DESCRIPTION, HOME_SHARE_TITLE, HOME_TITLE, jsonLdText, pageMeta } from "@/lib/seo";
-import { SITE_CREATOR, SITE_NAME, SITE_URL, SUPPORT_URL } from "@/lib/site";
+import { SITE_CREATOR, SITE_NAME, SITE_URL, SUPPORT_URL, WHATSAPP_CHANNEL_NAME, WHATSAPP_CHANNEL_URL } from "@/lib/site";
 
 export const metadata: Metadata = pageMeta({ title: HOME_TITLE, absolute: true, shareTitle: HOME_SHARE_TITLE, description: HOME_DESCRIPTION, path: "/" });
 
@@ -373,13 +373,29 @@ export default function Home() {
         <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-16 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:py-20">
           <div>
             <h2 className="font-mono text-2xl font-bold tracking-tight sm:text-[2rem]">Belum ketemu jawabannya?</h2>
-            <p className="mt-3 max-w-[60ch] text-muted">Tanya langsung ke owner, laporkan endpoint yang bermasalah, atau usulkan fitur baru.</p>
+            <p className="mt-3 max-w-[60ch] text-muted">
+              Tanya langsung ke owner, laporkan endpoint yang bermasalah, atau usulkan fitur baru. Pengumuman endpoint baru dan
+              gangguan juga kami kabarkan di{" "}
+              <a href={WHATSAPP_CHANNEL_URL} target="_blank" rel="noopener" className="link font-medium text-fg">
+                saluran WhatsApp resmi
+                <span className="sr-only"> ({WHATSAPP_CHANNEL_NAME}, terbuka di tab baru)</span>
+              </a>
+              .
+            </p>
           </div>
-          <a href={APPEAL_URL} target="_blank" rel="noopener" className="btn btn-secondary shrink-0">
-            Hubungi lewat WhatsApp
-            <ExternalIcon />
-            <span className="sr-only">(terbuka di tab baru)</span>
-          </a>
+          <div className="flex shrink-0 flex-col gap-3 sm:flex-row">
+            <a href={WHATSAPP_CHANNEL_URL} target="_blank" rel="noopener" className="btn btn-primary">
+              <ChannelIcon />
+              Ikuti saluran WhatsApp
+              <ExternalIcon />
+              <span className="sr-only">({WHATSAPP_CHANNEL_NAME}, terbuka di tab baru)</span>
+            </a>
+            <a href={APPEAL_URL} target="_blank" rel="noopener" className="btn btn-secondary">
+              Hubungi lewat WhatsApp
+              <ExternalIcon />
+              <span className="sr-only">(terbuka di tab baru)</span>
+            </a>
+          </div>
         </div>
       </section>
 

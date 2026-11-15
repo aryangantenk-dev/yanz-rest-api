@@ -324,6 +324,14 @@ export function GoogleIcon({ className }: P) {
     </svg>
   );
 }
+export function ChannelIcon({ className }: P) {
+  return (
+    <svg {...base} width={18} height={18} className={className}>
+      <path d="M3 11.5a2.5 2.5 0 0 1 2.5-2.5h1L11 5.5v13l-4.5-3.5h-1A2.5 2.5 0 0 1 3 12.5z" />
+      <path d="M14.5 9a4 4 0 0 1 0 6M17 6.5a7.5 7.5 0 0 1 0 11" />
+    </svg>
+  );
+}
 export function CameraIcon({ className }: P) {
   return (
     <svg {...base} width={20} height={20} className={className}>

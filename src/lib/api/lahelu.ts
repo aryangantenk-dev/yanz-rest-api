@@ -69,6 +69,8 @@ type Pool = {
   items: LaheluMeme[];
   ids: Set<string>;
   pages: number;
+  /** Halaman yang sudah pernah diambil, supaya pengambilan berikutnya memilih halaman lain dulu. */
+  seen: Set<number>;
   /** Ujung daftar sudah ketemu (atau sudah ditetapkan), jadi `pages` tidak ditumbuhkan lagi. */
   capped: boolean;
   fetchedAt: number;
@@ -156,17 +158,34 @@ function poolFor(tag: string): Pool {
       // Kolam meme populer (kunci kosong) dipertahankan; yang dibuang kolam tagar tertua.
       for (const k of pools.keys()) if (k) { pools.delete(k); break; }
     }
-    pool = { items: [], ids: new Set(), pages: tag ? 1 : PAGES_ALL, capped: !tag, fetchedAt: 0, known: false, emptyAt: 0, running: null, last: null };
+    pool = { items: [], ids: new Set(), pages: tag ? 1 : PAGES_ALL, seen: new Set(), capped: !tag, fetchedAt: 0, known: false, emptyAt: 0, running: null, last: null };
     pools.set(tag, pool);
   }
   return pool;
 }
 
+/** Halaman acak dalam jangkauan, mendahulukan yang belum pernah diambil. */
+function nextPage(pool: Pool): number {
+  if (pool.pages <= 12) {
+    const unseen: number[] = [];
+    for (let i = 0; i < pool.pages; i++) if (!pool.seen.has(i)) unseen.push(i);
+    if (unseen.length) return unseen[Math.floor(Math.random() * unseen.length)];
+  } else {
+    for (let i = 0; i < 6; i++) {
+      const page = Math.floor(Math.random() * pool.pages);
+      if (!pool.seen.has(page)) return page;
+    }
+  }
+  return Math.floor(Math.random() * pool.pages);
+}
+
 /** Mengambil satu halaman acak ke dalam kolam. Mengembalikan banyaknya meme baru. */
 async function refill(tag: string, pool: Pool): Promise<number> {
   for (let attempt = 0; attempt < 3; attempt++) {
-    const page = attempt === 2 ? 0 : Math.floor(Math.random() * pool.pages);
+    const page = attempt === 2 ? 0 : nextPage(pool);
     const { memes, total } = await fetchPage(tag, page);
+    pool.seen.add(page);
+    if (pool.seen.size > 2000) pool.seen.clear();
     if (!total) {
       if (page === 0) {
         if (!pool.known) pool.emptyAt = Date.now();
@@ -214,16 +233,18 @@ export async function randomLaheluMeme(filter: MemeFilter, tag: string): Promise
 
   let found = pick();
   if (!knownEmpty() && (!found.length || Date.now() - pool.fetchedAt >= PAGE_GAP_MS)) {
+    let added = 0;
     try {
-      await refillOnce(tag, pool);
+      added = await refillOnce(tag, pool);
     } catch (e) {
       // Lahelu sedang menolak atau lambat: selama kolam masih berisi, pakai yang ada.
       if (!found.length) throw e;
     }
     found = pick();
-    // Halaman yang baru datang bisa saja tidak memuat jenis yang diminta (mis. tidak ada video).
-    for (let i = 0; i < 2 && !found.length && !knownEmpty(); i++) {
-      if (!(await refillOnce(tag, pool))) break;
+    // Halaman yang baru datang bisa saja tidak memuat jenis yang diminta (mis. tidak ada gambar),
+    // jadi ambil beberapa halaman lagi selama masih ada meme baru yang masuk.
+    for (let i = 0; i < 3 && !found.length && added > 0 && !knownEmpty(); i++) {
+      added = await refillOnce(tag, pool);
       found = pick();
     }
   }

@@ -528,3 +528,162 @@ details[open] > .faq-body {
 :root[data-signed="1"] .only-guest {
   display: none;
 }
+
+/* ---------- Pop-up iklan saluran WhatsApp ----------
+   Gaya mengikuti sistem desain: sudut tajam, tanpa gradien, satu aksen hijau.
+   Tersembunyi total (dan tidak bisa difokus) sampai kelas promo-open dipasang lewat JavaScript. */
+.promo-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgb(2 6 23 / 0.62);
+  backdrop-filter: blur(2px);
+}
+.promo-backdrop.promo-open {
+  display: flex;
+  animation: promo-fade var(--dur-enter) var(--ease-out);
+}
+.promo-card {
+  position: relative;
+  width: 100%;
+  max-width: 23rem;
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: 0 24px 60px -24px rgb(2 6 23 / 0.55);
+  outline: none;
+  animation: promo-rise var(--dur-reveal) var(--ease-out);
+}
+.promo-card:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.promo-close {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  color: var(--fg);
+  background: var(--card);
+  border: 1px solid var(--line);
+  transition: background-color var(--dur-fast) ease-out, border-color var(--dur-fast) ease-out;
+}
+.promo-close:hover {
+  background: var(--subtle);
+  border-color: var(--control);
+}
+.promo-art {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1 / 1;
+  max-height: 15rem;
+  background: var(--code);
+  border-bottom: 1px solid var(--line);
+}
+.promo-wordmark {
+  font-family: var(--font-mono, ui-monospace), monospace;
+  font-size: clamp(2.5rem, 12vw, 3.75rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--code-fg);
+}
+.promo-wordmark::after {
+  content: ".";
+  color: var(--code-ok);
+}
+.promo-body {
+  padding: 1.25rem 1.25rem 1.5rem;
+}
+.promo-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.2rem 0.5rem;
+  font-family: var(--font-mono, ui-monospace), monospace;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ok);
+  border: 1px solid currentColor;
+}
+.promo-title {
+  margin-top: 0.75rem;
+  font-family: var(--font-mono, ui-monospace), monospace;
+  font-size: 1.0625rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  line-height: 1.3;
+}
+.promo-desc {
+  margin-top: 0.625rem;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: var(--muted);
+}
+.promo-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 3rem;
+  margin-top: 1.25rem;
+  padding: 0 1rem;
+  font-size: 0.9375rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #04110a;
+  background: #25d366;
+  border: 1px solid #128c4a;
+  transition: background-color var(--dur-fast) ease-out, transform var(--dur-press) ease-out;
+}
+.promo-cta:hover {
+  background: #1ebe5b;
+}
+.promo-cta:active {
+  transform: scale(0.99);
+}
+.promo-later {
+  display: block;
+  width: 100%;
+  min-height: 2.75rem;
+  margin-top: 0.5rem;
+  font-family: var(--font-mono, ui-monospace), monospace;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  transition: color var(--dur-fast) ease-out;
+}
+.promo-later:hover {
+  color: var(--fg);
+}
+@keyframes promo-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes promo-rise {
+  from { opacity: 0; transform: translateY(12px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .promo-backdrop.promo-open,
+  .promo-card {
+    animation: none;
+  }
+}

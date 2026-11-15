@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { endpoints } from "@/lib/api/registry";
 import { AUTH_ENABLED } from "@/lib/auth/config";
+import { ChannelPromo } from "./channel-promo";
 import { SiteFooter } from "./site-footer";
 import { SiteHeader } from "./site-header";
 
@@ -13,6 +14,7 @@ export function SiteFrame({ children }: { children: ReactNode }) {
         {children}
       </main>
       <SiteFooter total={endpoints.length} />
+      <ChannelPromo />
     </>
   );
 }

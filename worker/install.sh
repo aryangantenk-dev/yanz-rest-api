@@ -252,13 +252,46 @@ install_native() {
   fi
 
   echo "[2/5] Menyiapkan lingkungan Python (.venv) tanpa cache duplikat..."
-  if [ ! -x "$DIR/.venv/bin/python" ]; then
-    python3 -m venv "$DIR/.venv"
+  # Pilih Python >= 3.11 (dibutuhkan rembg & rapidocr terbaru).
+  PYBIN=""
+  for cand in "${YANZ_PYTHON:-}" python3.13 python3.12 python3.11 python3; do
+    [ -n "$cand" ] || continue
+    command -v "$cand" >/dev/null 2>&1 || continue
+    if "$cand" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] >= (3, 11) else 1)' 2>/dev/null; then
+      PYBIN="$cand"
+      break
+    fi
+  done
+  if [ -z "$PYBIN" ]; then
+    echo "Butuh Python 3.11 atau lebih baru. Pasang dulu, misal: sudo apt install python3.11 python3.11-venv" >&2
+    exit 1
   fi
-  "$DIR/.venv/bin/pip" install -q --no-cache-dir --upgrade pip
-  "$DIR/.venv/bin/pip" install -q --no-cache-dir -r "$DIR/requirements.txt"
-  "$DIR/.venv/bin/pip" uninstall -y -q opencv-python >/dev/null 2>&1 || true
-  "$DIR/.venv/bin/pip" install -q --no-cache-dir --force-reinstall --no-deps opencv-python-headless
+  echo "      Memakai $("$PYBIN" -V 2>&1) ($PYBIN)"
+  if [ -x "$DIR/.venv/bin/python" ] && ! "$DIR/.venv/bin/python" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] >= (3, 11) else 1)' 2>/dev/null; then
+    rm -rf "$DIR/.venv"
+  fi
+  if [ ! -x "$DIR/.venv/bin/python" ]; then
+    "$PYBIN" -m venv "$DIR/.venv"
+  fi
+  "$DIR/.venv/bin/pip" install -q --no-cache-dir --retries 5 --upgrade pip
+
+  # Pasang dependensi. Bila satu paket gagal (mis. OCR belum punya roda untuk
+  # versi Python di mesin ini), ulangi tanpa fitur itu supaya 9 fitur lain tetap hidup.
+  if ! "$DIR/.venv/bin/pip" install --no-cache-dir --retries 5 -r "$DIR/requirements.txt"; then
+    echo "Sebagian dependensi gagal dipasang. Mencoba ulang tanpa OCR (rapidocr/opencv)..."
+    grep -viE '^(rapidocr|opencv-python-headless)' "$DIR/requirements.txt" > "$DIR/.requirements.noocr.txt"
+    if "$DIR/.venv/bin/pip" install --no-cache-dir --retries 5 -r "$DIR/.requirements.noocr.txt"; then
+      echo "Peringatan: fitur /v1/ocr tidak aktif di mesin ini; 9 fitur lain tetap berjalan." >&2
+    else
+      echo "Pemasangan dependensi Python gagal. Kirim log di atas ke chat Arena." >&2
+      exit 1
+    fi
+  fi
+  # rapidocr menarik opencv (versi GUI). Di server tanpa layar, ganti ke varian headless.
+  if "$DIR/.venv/bin/pip" show opencv-python >/dev/null 2>&1; then
+    "$DIR/.venv/bin/pip" uninstall -y -q opencv-python >/dev/null 2>&1 || true
+    "$DIR/.venv/bin/pip" install -q --no-cache-dir --force-reinstall --no-deps opencv-python-headless
+  fi
 
   echo "[3/5] Menyiapkan browser Chromium..."
   SYS_CHROME="$(command -v chromium || command -v chromium-browser || command -v google-chrome || true)"
@@ -291,14 +324,17 @@ install_native() {
   export WHISPER_MODEL="$WHISPER_CHOICE"
 
   if [ -z "$(find "$DIR/.models/rembg" -name '*.onnx' -print -quit 2>/dev/null)" ]; then
-    "$DIR/.venv/bin/python" -c "from rembg import new_session; new_session('u2net')"
+    "$DIR/.venv/bin/python" -c "from rembg import new_session; new_session('u2net')" \
+      || echo "Peringatan: model hapus latar gagal diunduh; ulangi nanti dengan: bash install.sh" >&2
   fi
   if [ -z "$(find "$DIR/.models/tts" -name '*.onnx' -print -quit 2>/dev/null)" ]; then
     curl -fL --retry 3 --retry-delay 2 -sS \
       https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-id_ID-news_tts-medium.tar.bz2 \
-      | tar xj -C "$DIR/.models/tts"
+      | tar xj -C "$DIR/.models/tts" \
+      || echo "Peringatan: model suara gagal diunduh; ulangi nanti dengan: bash install.sh" >&2
   fi
-  "$DIR/.venv/bin/python" -c "import os; from faster_whisper import WhisperModel; WhisperModel(os.environ['WHISPER_MODEL'], device='cpu', compute_type='int8')"
+  "$DIR/.venv/bin/python" -c "import os; from faster_whisper import WhisperModel; WhisperModel(os.environ['WHISPER_MODEL'], device='cpu', compute_type='int8')" \
+    || echo "Peringatan: model Whisper gagal diunduh; ulangi nanti dengan: bash install.sh" >&2
 
   echo "[5/5] Menyalakan yanz-worker di latar belakang (port ${PORT})..."
   if [ -d /run/systemd/system ] && ( [ "$(id -u)" = "0" ] || command -v sudo >/dev/null 2>&1 ); then

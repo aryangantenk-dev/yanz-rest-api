@@ -4,3 +4,4 @@
 .models/
 .browsers/
 __pycache__/
+.requirements.noocr.txt

@@ -639,13 +639,32 @@ async def ocr(request: web.Request, work: Path) -> web.Response:
     png = await to_png(src, work, 2400)
 
     def load():
-        from rapidocr_onnxruntime import RapidOCR
+        # rapidocr 3.x (didukung Python 3.13) memakai API objek keluaran yang berbeda
+        # dari rapidocr-onnxruntime 1.x. Keduanya diterima supaya worker tetap jalan
+        # di mesin lama maupun baru.
+        try:
+            from rapidocr import RapidOCR
 
-        return RapidOCR()
+            return "v3", RapidOCR()
+        except ImportError:
+            from rapidocr_onnxruntime import RapidOCR
 
-    engine = await model("ocr", load)
+            return "v2", RapidOCR()
+
+    kind, engine = await model("ocr", load)
 
     def job():
+        if kind == "v3":
+            out = engine(str(png))
+            boxes = getattr(out, "boxes", None)
+            txts = getattr(out, "txts", None)
+            scores = getattr(out, "scores", None)
+            if boxes is None or txts is None:
+                return []
+            return [
+                [[[float(x), float(y)] for x, y in box], str(text), float(score or 0)]
+                for box, text, score in zip(boxes, txts, scores or [0] * len(txts))
+            ]
         result, _ = engine(str(png))
         return result or []
 

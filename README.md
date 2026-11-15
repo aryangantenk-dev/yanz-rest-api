@@ -76,6 +76,23 @@ Untuk owner (butuh `ADMIN_KEY`):
 /api/admin/userunban?email=a@b.com&key=ADMIN_KEY  aktifkan lagi
 ```
 
+### Akun admin
+
+Sebuah akun bisa dijadikan admin (kolom `api_users.is_admin`). Akun admin:
+
+- tidak terkena kuota harian, dan batas per menitnya dihitung per akun (600 per menit, atau `RATE_LIMIT_PER_MIN` kalau nilainya lebih besar); header jawabannya `x-plan: admin`,
+- bisa membuka halaman `/admin` setelah login: daftar akun (cari, atur paket, nonaktifkan dan aktifkan lagi), pesanan paket, blokir IP, dan status pembayaran,
+- tidak bisa dinonaktifkan lewat `userban` sebelum status adminnya dicabut.
+
+Status admin hanya bisa diberi atau dicabut dengan `ADMIN_KEY`, tidak dari halaman `/admin`:
+
+```
+/api/admin/setadmin?email=a@b.com&admin=1&key=ADMIN_KEY   jadikan admin
+/api/admin/setadmin?email=a@b.com&admin=0&key=ADMIN_KEY   cabut
+```
+
+Semua endpoint `/api/admin/…` lain menerima `ADMIN_KEY` **atau** sesi login akun admin. Dengan sesi login, permintaan harus datang dari situs ini sendiri dan membawa header `x-requested-with: yanz-admin` (halaman `/admin` mengirimnya otomatis), jadi tautan dari situs lain tidak bisa menjalankan aksi admin. Perubahan status admin berlaku untuk API key paling lama satu menit kemudian.
+
 Data akun ada di tabel `api_users`; kode verifikasi di `auth_otps` (yang disimpan hanya hash-nya). Sesi login adalah cookie bertanda tangan yang berlaku 30 hari.
 
 ## Paket dan kuota harian

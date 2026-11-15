@@ -26,7 +26,7 @@ type Usage = {
 };
 
 /** Paket yang sedang berlaku untuk akun ini (dari /api/auth/usage). */
-type PlanInfo = { id: string; name: string; daily: number; perMinute: number; paid: boolean; expires_at: string | null };
+type PlanInfo = { id: string; name: string; daily: number; perMinute: number; paid: boolean; expires_at: string | null; /** Akun admin: tanpa kuota harian. */ unlimited?: boolean };
 
 const LOGIN_HREF = "/login?next=/dashboard";
 /** Jeda pembaruan otomatis. Saat gagal, jedanya digandakan sampai paling lama POLL_MAX_MS. */
@@ -433,7 +433,26 @@ function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
             ))}
           </dl>
 
-          {plan && (
+          {plan?.unlimited && (
+            <section aria-labelledby="dash-paket" className="border border-line bg-card p-4 sm:p-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <h2 id="dash-paket" className="font-mono text-lg font-bold">
+                    Akun admin
+                  </h2>
+                  <p className="tnum mt-1 text-sm text-muted">
+                    Tanpa kuota harian. <strong className="font-mono font-semibold text-fg">{fmt(usage.today)}</strong> permintaan hari ini.
+                  </p>
+                </div>
+                <Link href="/admin" className="btn btn-secondary shrink-0">
+                  Buka panel admin
+                  <ArrowIcon />
+                </Link>
+              </div>
+            </section>
+          )}
+
+          {plan && !plan.unlimited && (
             <section aria-labelledby="dash-paket" className="border border-line bg-card p-4 sm:p-6">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
@@ -510,7 +529,7 @@ function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
                       <div className="flex flex-wrap items-baseline justify-between gap-x-4 border-t border-line py-2.5">
                         <dt className="text-muted">Batas permintaan</dt>
                         <dd className="tnum font-medium">
-                          {fmt(limit)} per menit {plan?.paid ? "per akun" : "per IP"}
+                          {fmt(limit)} per menit {plan?.paid || plan?.unlimited ? "per akun" : "per IP"}
                         </dd>
                       </div>
                     )}

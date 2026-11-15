@@ -6,7 +6,7 @@ import { clearSessionCookie, isSecure, sessionUserId } from "@/lib/auth/session"
 import { keyOwner, userById, type User } from "@/lib/auth/users";
 import { ORDER_ID_RE, newOrderId, orderAttach, orderClose, orderGet, orderOpen, orderPaid, orderSync, ordersOf, publicOrder, type Order } from "@/lib/billing/orders";
 import { FEE_ON_CUSTOMER, GATEWAY_READY, GatewayError, MAX_AMOUNT, MIN_AMOUNT, WEBHOOK_READY, createPayment, verifyWebhook } from "@/lib/billing/welper";
-import { PLAN_DAYS, PLAN_MONTHS, activePlan, planById } from "@/lib/plans";
+import { PLAN_DAYS, PLAN_MONTHS, planById, planView } from "@/lib/plans";
 import { SITE_CREATOR, SITE_NAME } from "@/lib/site";
 
 export const dynamic = "force-dynamic";
@@ -29,11 +29,7 @@ const fail = (status: number, error: string, extra: Record<string, unknown> = {}
 
 const STORE_DOWN = "Server akun sedang tidak dapat dihubungi. Coba lagi sebentar lagi.";
 
-function planInfo(user: User) {
-  const plan = activePlan(user.plan, user.plan_expires_at);
-  const paid = plan.price > 0;
-  return { id: plan.id, name: plan.name, daily: plan.daily, perMinute: plan.perMinute, paid, expires_at: paid ? (user.plan_expires_at ?? null) : null };
-}
+const planInfo = (user: User) => planView(user.plan, user.plan_expires_at, user.is_admin === true);
 
 /** Akun yang sedang masuk, atau jawaban galat yang tinggal dikembalikan. */
 async function signedIn(req: Request, what: string): Promise<User | NextResponse> {

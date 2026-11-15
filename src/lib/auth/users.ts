@@ -21,11 +21,13 @@ export type User = {
   /** Id paket ('free' atau paket berbayar) dan akhir masa aktifnya; lihat src/lib/plans.ts. */
   plan?: string;
   plan_expires_at?: string | null;
+  /** Akun admin: boleh membuka /admin dan tidak terkena kuota harian. */
+  is_admin?: boolean;
 };
 
 /** Bentuk akun yang boleh dikirim ke browser pemiliknya. */
 export function publicUser(u: User) {
-  return { email: u.email, name: u.name, username: u.username, photo: u.photo ? `/avatar/${u.photo}` : "", provider: u.provider, created_at: u.created_at };
+  return { email: u.email, name: u.name, username: u.username, photo: u.photo ? `/avatar/${u.photo}` : "", provider: u.provider, created_at: u.created_at, admin: u.is_admin === true };
 }
 
 /**
@@ -51,7 +53,7 @@ export function userById(id: string): Promise<User | null> {
   return supabaseRpc<User | null>("auth_user", { p_id: id });
 }
 
-export type KeyOwner = { id: string; banned: boolean; plan?: string; plan_expires_at?: string | null; used_today?: number };
+export type KeyOwner = { id: string; banned: boolean; plan?: string; plan_expires_at?: string | null; used_today?: number; is_admin?: boolean };
 
 export function keyOwner(key: string): Promise<KeyOwner | null> {
   return supabaseRpc<KeyOwner | null>("auth_key_user", { p_key: key });
@@ -95,12 +97,18 @@ export async function otpCancel(email: string): Promise<void> {
   await supabaseRpc("auth_otp_cancel", { p_email: email });
 }
 
-export type AdminUsers = { total: number; users: { email: string; username: string; name: string; provider: string; banned: boolean; created_at: string; last_login_at: string; api_key: string; plan?: string; plan_expires_at?: string | null }[] };
+export type AdminUsers = { total: number; users: { email: string; username: string; name: string; provider: string; banned: boolean; created_at: string; last_login_at: string; api_key: string; plan?: string; plan_expires_at?: string | null; is_admin?: boolean; used_today?: number; used_total?: number }[] };
 
 export function adminUsers(limit: number): Promise<AdminUsers> {
   return supabaseRpc<AdminUsers>("auth_admin_users", { p_limit: limit });
 }
 
+/** false bila akunnya tidak ada, atau bila yang hendak dinonaktifkan adalah akun admin. */
 export function setBanned(email: string, banned: boolean): Promise<boolean> {
   return supabaseRpc<boolean>("auth_set_banned", { p_email: email, p_banned: banned });
+}
+
+/** Jadikan sebuah akun admin, atau cabut status adminnya. null bila akunnya tidak ada. */
+export function setAdmin(email: string, admin: boolean): Promise<{ email: string; username: string; is_admin: boolean } | null> {
+  return supabaseRpc<{ email: string; username: string; is_admin: boolean } | null>("auth_set_admin", { p_email: email, p_admin: admin });
 }

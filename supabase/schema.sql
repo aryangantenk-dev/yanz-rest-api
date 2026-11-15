@@ -811,3 +811,99 @@ grant execute on function public.plan_order_close(text, text) to service_role;
 grant execute on function public.plan_orders(uuid, integer) to service_role;
 grant execute on function public.plan_admin_set(text, text, integer) to service_role;
 grant execute on function public.plan_admin_orders(integer) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Akun admin (halaman /admin).
+-- Akun admin boleh menjalankan aksi /api/admin dengan sesi loginnya (tanpa ADMIN_KEY) dan
+-- tidak terkena kuota harian. Status admin hanya diubah lewat auth_set_admin.
+-- Fungsi auth_user_json, auth_key_user, auth_set_banned, dan auth_admin_users di bawah ini
+-- menggantikan versi di atas.
+-- ---------------------------------------------------------------------------
+
+alter table public.api_users add column if not exists is_admin boolean not null default false;
+
+create or replace function public.auth_user_json(u public.api_users)
+returns json
+language sql
+immutable
+set search_path = ''
+as $$
+  select json_build_object(
+    'id', u.id, 'email', u.email, 'name', u.name, 'avatar', u.avatar, 'provider', u.provider,
+    'username', coalesce(u.username, ''), 'photo', u.photo,
+    'api_key', u.api_key, 'banned', u.banned, 'created_at', u.created_at, 'last_login_at', u.last_login_at,
+    'plan', u.plan, 'plan_expires_at', u.plan_expires_at, 'is_admin', u.is_admin
+  );
+$$;
+
+create or replace function public.auth_key_user(p_key text)
+returns json
+language sql
+stable
+set search_path = ''
+as $$
+  select json_build_object(
+    'id', u.id, 'banned', u.banned, 'is_admin', u.is_admin,
+    'plan', case when u.plan <> 'free' and u.plan_expires_at > now() then u.plan else 'free' end,
+    'plan_expires_at', u.plan_expires_at,
+    'used_today', coalesce((
+      select sum(a.hits) from public.api_usage a
+      where a.user_id = u.id and a.day = (now() at time zone 'Asia/Jakarta')::date
+    ), 0)
+  )
+  from public.api_users u where u.api_key = p_key;
+$$;
+
+-- Akun admin tidak bisa dinonaktifkan; cabut dulu status adminnya (auth_set_admin).
+create or replace function public.auth_set_banned(p_email text, p_banned boolean)
+returns boolean
+language plpgsql
+set search_path = ''
+as $$
+begin
+  update public.api_users set banned = p_banned where email = lower(p_email) and not (p_banned and is_admin);
+  return found;
+end;
+$$;
+
+-- Jadikan sebuah akun admin, atau cabut status adminnya (/api/admin/setadmin, hanya dengan ADMIN_KEY).
+create or replace function public.auth_set_admin(p_email text, p_admin boolean)
+returns json
+language plpgsql
+set search_path = ''
+as $$
+declare
+  u public.api_users;
+begin
+  update public.api_users set is_admin = p_admin where email = lower(p_email) returning * into u;
+  if not found then
+    return null;
+  end if;
+  return json_build_object('email', u.email, 'username', coalesce(u.username, ''), 'is_admin', u.is_admin);
+end;
+$$;
+
+-- Untuk owner dan admin (/api/admin/users): akun terbaru, API key disamarkan, beserta paket dan pemakaiannya.
+create or replace function public.auth_admin_users(p_limit integer)
+returns json
+language sql
+stable
+set search_path = ''
+as $$
+  select json_build_object(
+    'total', (select count(*) from public.api_users),
+    'users', (
+      select coalesce(json_agg(t), '[]'::json) from (
+        select u.email, coalesce(u.username, '') as username, u.name, u.provider, u.banned, u.is_admin, u.created_at, u.last_login_at,
+               left(u.api_key, 7) || '…' || right(u.api_key, 4) as api_key,
+               case when u.plan <> 'free' and u.plan_expires_at > now() then u.plan else 'free' end as plan, u.plan_expires_at,
+               coalesce((select sum(a.hits) from public.api_usage a where a.user_id = u.id and a.day = (now() at time zone 'Asia/Jakarta')::date), 0) as used_today,
+               coalesce((select x.hits from public.api_usage_totals x where x.user_id = u.id), 0) as used_total
+        from public.api_users u order by u.created_at desc limit greatest(1, least(p_limit, 500))
+      ) t
+    )
+  );
+$$;
+
+revoke all on function public.auth_set_admin(text, boolean) from public, anon, authenticated;
+grant execute on function public.auth_set_admin(text, boolean) to service_role;

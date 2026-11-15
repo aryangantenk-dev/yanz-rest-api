@@ -16,6 +16,8 @@ export type AuthUser = {
   photo: string;
   provider: "google" | "email";
   created_at: string;
+  /** Akun admin: menu Admin tampil dan halaman /admin bisa dibuka. */
+  admin?: boolean;
 };
 
 /** Bagian jawaban server yang menggambarkan sesi (dari /api/auth/me, verify, username, photo, regenerate). */

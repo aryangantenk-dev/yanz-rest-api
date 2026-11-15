@@ -47,6 +47,30 @@ export function activePlan(id: string | null | undefined, expiresAt: string | nu
   return Number.isFinite(until) && until > now ? plan : FREE_PLAN;
 }
 
+/** Batas per menit untuk akun admin, dihitung per akun. Akun admin tidak terkena kuota harian. */
+export const ADMIN_PER_MINUTE = Math.max(600, ...PLANS.map((p) => p.perMinute));
+
+/** Paket sebuah akun dalam bentuk yang dikirim ke browser (halaman /paket dan /dashboard). */
+export type PlanView = {
+  id: string;
+  name: string;
+  /** Kuota per hari; 0 dan tidak dipakai bila `unlimited`. */
+  daily: number;
+  perMinute: number;
+  /** Paket berbayar yang masih aktif. */
+  paid: boolean;
+  expires_at: string | null;
+  /** Akun admin: tanpa kuota harian. */
+  unlimited: boolean;
+};
+
+export function planView(id: string | null | undefined, expiresAt: string | null | undefined, admin = false): PlanView {
+  if (admin) return { id: "admin", name: "Admin", daily: 0, perMinute: ADMIN_PER_MINUTE, paid: false, expires_at: null, unlimited: true };
+  const plan = activePlan(id, expiresAt);
+  const paid = plan.price > 0;
+  return { id: plan.id, name: plan.name, daily: plan.daily, perMinute: plan.perMinute, paid, expires_at: paid ? (expiresAt ?? null) : null, unlimited: false };
+}
+
 const nf = new Intl.NumberFormat("id-ID");
 export const formatNumber = (n: number) => nf.format(n);
 export const rupiah = (n: number) => `Rp${nf.format(n)}`;

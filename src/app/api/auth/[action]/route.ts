@@ -9,7 +9,7 @@ import { clearSessionCookie, isSecure, otpHash, sessionCookie, sessionUserId } f
 import { login, normalizeEmail, otpCancel, otpCheck, otpIssue, rotateKey, sessionBody, setPhoto, setUsername, userById, usernameTaken, type User } from "@/lib/auth/users";
 import { usageSummary } from "@/lib/auth/usage";
 import { clientIp } from "@/lib/guard";
-import { activePlan } from "@/lib/plans";
+import { planView } from "@/lib/plans";
 import { AVATAR_DIR, MAX_AVATAR_BYTES, hasImageStore, removeImages, saveImage, sniffImage } from "@/lib/images";
 import { USERNAME_TAKEN, cleanUsername, usernameProblem } from "@/lib/username";
 import { SITE_CREATOR, getOrigin } from "@/lib/site";
@@ -77,12 +77,8 @@ async function usage(req: Request) {
   try {
     const user = await userById(id);
     if (!user || user.banned) return fail(401, "Sesi berakhir. Masuk lagi untuk melihat statistik.", {}, clearSessionCookie(isSecure(req)));
-    const plan = activePlan(user.plan, user.plan_expires_at);
-    return json(200, {
-      usage: await usageSummary(id),
-      limit: plan.perMinute,
-      plan: { id: plan.id, name: plan.name, daily: plan.daily, perMinute: plan.perMinute, paid: plan.price > 0, expires_at: plan.price > 0 ? (user.plan_expires_at ?? null) : null },
-    });
+    const plan = planView(user.plan, user.plan_expires_at, user.is_admin === true);
+    return json(200, { usage: await usageSummary(id), limit: plan.perMinute, plan });
   } catch (e) {
     console.error("[auth/usage]", e);
     return fail(503, STORE_DOWN);

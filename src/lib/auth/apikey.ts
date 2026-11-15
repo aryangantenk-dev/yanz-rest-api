@@ -1,4 +1,4 @@
-import { FREE_PLAN, activePlan, type Plan } from "@/lib/plans";
+import { ADMIN_PER_MINUTE, FREE_PLAN, activePlan, type Plan } from "@/lib/plans";
 import { KEY_RE } from "./keys";
 import { keyOwner } from "./users";
 
@@ -24,6 +24,8 @@ type Entry = {
   /** Id paket di database dan akhir masa aktifnya (ms; 0 bila tidak ada). */
   plan: string;
   planExp: number;
+  /** Akun admin: tanpa kuota harian, batas per menitnya dihitung per akun. */
+  admin: boolean;
   /** Permintaan yang sudah dipakai pada hari `day` (nomor hari menurut WIB). */
   used: number;
   day: number;
@@ -58,6 +60,7 @@ export async function verifyKey(key: string): Promise<KeyVerdict> {
   let plan = "free";
   let planExp = 0;
   let used = 0;
+  let admin = false;
   try {
     const owner = await keyOwner(key);
     verdict = !owner ? "invalid" : owner.banned ? "banned" : "ok";
@@ -65,6 +68,7 @@ export async function verifyKey(key: string): Promise<KeyVerdict> {
     plan = owner?.plan || "free";
     planExp = owner?.plan_expires_at ? Date.parse(owner.plan_expires_at) || 0 : 0;
     used = Math.max(0, Math.floor(Number(owner?.used_today) || 0));
+    admin = owner?.is_admin === true;
   } catch {
     // Database tidak bisa dihubungi: pakai jawaban terakhir bila ada, selain itu tolak dulu.
     return hit ? hit.verdict : "error";
@@ -73,7 +77,7 @@ export async function verifyKey(key: string): Promise<KeyVerdict> {
     for (const [k, v] of cache) if (v.exp <= now) cache.delete(k);
     if (cache.size >= MAX_ENTRIES) cache.clear();
   }
-  cache.set(key, { verdict, id, exp: now + (verdict === "ok" ? VALID_TTL_MS : INVALID_TTL_MS), plan, planExp, used, day: wibDay(now) });
+  cache.set(key, { verdict, id, exp: now + (verdict === "ok" ? VALID_TTL_MS : INVALID_TTL_MS), plan, planExp, admin, used, day: wibDay(now) });
   return verdict;
 }
 
@@ -90,17 +94,18 @@ export function keyKnown(key: string): boolean {
 
 /**
  * Untuk pembatas per menit, dipakai sebelum key diperiksa ke database: akun paket berbayar
- * dihitung per akun dengan batas paketnya, bukan per IP. null untuk paket gratis dan untuk key
+ * dan akun admin dihitung per akun dengan batasnya sendiri, bukan per IP. null untuk paket gratis dan untuk key
  * yang belum dikenal di instance ini (termasuk tebakan), yang tetap dihitung per IP.
  */
 export function keyPaid(key: string): { id: string; limit: number; name: string } | null {
   const hit = key ? cache.get(key) : undefined;
   if (!hit || hit.verdict !== "ok" || !hit.id) return null;
+  if (hit.admin) return { id: hit.id, limit: ADMIN_PER_MINUTE, name: "Admin" };
   const plan = activePlan(hit.plan, hit.planExp);
   return plan.price > 0 ? { id: hit.id, limit: plan.perMinute, name: plan.name } : null;
 }
 
-export type KeyQuota = { plan: Plan; used: number; left: number; /** Detik sampai kuota terisi lagi (00.00 WIB). */ resetIn: number };
+export type KeyQuota = { plan: Plan; used: number; left: number; /** Detik sampai kuota terisi lagi (00.00 WIB). */ resetIn: number; /** Akun admin: kuota harian tidak berlaku. */ unlimited: boolean };
 
 /** Kuota harian sebuah key yang baru saja lolos `verifyKey`. */
 export function keyQuota(key: string): KeyQuota {
@@ -108,7 +113,7 @@ export function keyQuota(key: string): KeyQuota {
   const hit = cache.get(key);
   const plan = cachedPlan(key, now);
   const used = hit && hit.day === wibDay(now) ? hit.used : 0;
-  return { plan, used, left: Math.max(0, plan.daily - used), resetIn: Math.max(1, Math.ceil(((wibDay(now) + 1) * DAY_MS - WIB_MS - now) / 1000)) };
+  return { plan, used, left: Math.max(0, plan.daily - used), unlimited: !!hit && hit.verdict === "ok" && hit.admin, resetIn: Math.max(1, Math.ceil(((wibDay(now) + 1) * DAY_MS - WIB_MS - now) / 1000)) };
 }
 
 /** Hitung satu permintaan ke kuota harian key ini (angka di database menyusul lewat recordUsage). */

@@ -6,7 +6,7 @@ import { formatNumber, rupiah, type Plan } from "@/lib/plans";
 import { refreshAuth, useAuth } from "./auth-client";
 import { ArrowIcon, CheckIcon, RefreshIcon } from "./icons";
 
-type PlanInfo = { id: string; name: string; daily: number; perMinute: number; paid: boolean; expires_at: string | null };
+type PlanInfo = { id: string; name: string; daily: number; perMinute: number; paid: boolean; expires_at: string | null; /** Akun admin: tanpa kuota harian. */ unlimited?: boolean };
 type Order = { id: string; plan: string; months: number; amount: number; total: number | null; status: string; payment_url: string; expires_at: string | null; created_at: string; paid_at: string | null };
 type Me = { plan: PlanInfo; today: number; orders: Order[]; payment: boolean; needsUsername: boolean };
 type Notice = { tone: "ok" | "info" | "danger"; text: string };
@@ -187,7 +187,18 @@ export function PlanPanel({
         </div>
       )}
 
-      {current && me && (
+      {current?.unlimited && me && (
+        <section aria-labelledby="paket-kamu" className="border border-line bg-card p-4 sm:p-6">
+          <h2 id="paket-kamu" className="font-mono text-lg font-bold">
+            Akun admin
+          </h2>
+          <p className="tnum mt-2 text-sm text-muted">
+            Akun ini tidak terkena kuota harian, jadi tidak perlu membeli paket. <strong className="font-mono font-semibold text-fg">{formatNumber(me.today)}</strong> permintaan hari ini.
+          </p>
+        </section>
+      )}
+
+      {current && !current.unlimited && me && (
         <section aria-labelledby="paket-kamu" className="border border-line bg-card p-4 sm:p-6">
           <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
             <h2 id="paket-kamu" className="font-mono text-lg font-bold">

@@ -78,7 +78,7 @@ async function handle(req: Request, ctx: RouteCtx) {
   }
   if (verdict.kind === "limited") {
     if (paid) {
-      return fail(429, `Terlalu banyak permintaan: batas paket ${paid.name} adalah ${formatNumber(paid.limit)} per menit. Coba lagi dalam ${verdict.retryAfter} detik.`, rlHeaders, {
+      return fail(429, `Terlalu banyak permintaan: batas ${paid.name === "Admin" ? "akun admin" : `paket ${paid.name}`} adalah ${formatNumber(paid.limit)} per menit. Coba lagi dalam ${verdict.retryAfter} detik.`, rlHeaders, {
         limit: paid.limit,
         retry_after: verdict.retryAfter,
       });
@@ -107,10 +107,11 @@ async function handle(req: Request, ctx: RouteCtx) {
       return fail(403, `API key tidak valid atau sudah diganti. Lihat API key kamu yang berlaku di ${origin}/akun.`, rlHeaders, { login: `${origin}/login` });
     }
 
-    // Kuota harian paket pemilik key. Terisi lagi pukul 00.00 WIB.
+    // Kuota harian paket pemilik key. Terisi lagi pukul 00.00 WIB. Akun admin tidak terkena kuota.
     const quota = keyQuota(apiKey);
+    if (quota.unlimited) rlHeaders = { ...rlHeaders, "x-plan": "admin" };
     const quotaHeaders = (left: number) => ({ "x-plan": quota.plan.id, "x-quota-limit": String(quota.plan.daily), "x-quota-remaining": String(left), "x-quota-reset": String(quota.resetIn) });
-    if (quota.left <= 0) {
+    if (!quota.unlimited && quota.left <= 0) {
       return fail(
         429,
         `Kuota harian paket ${quota.plan.name} (${formatNumber(quota.plan.daily)} permintaan) sudah habis. Kuota terisi lagi pukul 00.00 WIB. Butuh lebih banyak? Lihat pilihan paket di ${origin}/paket.`,
@@ -119,7 +120,7 @@ async function handle(req: Request, ctx: RouteCtx) {
       );
     }
     keyUse(apiKey);
-    rlHeaders = { ...rlHeaders, ...quotaHeaders(quota.left - 1) };
+    if (!quota.unlimited) rlHeaders = { ...rlHeaders, ...quotaHeaders(quota.left - 1) };
   }
 
   // Pemilik key, untuk statistik pemakaian di /dashboard. null bila API key tidak diwajibkan.

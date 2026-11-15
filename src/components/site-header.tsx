@@ -50,6 +50,8 @@ export function SiteHeader({ authEnabled = false }: { authEnabled?: boolean }) {
   // Menu seluler terikat ke halaman tempat ia dibuka, jadi otomatis tertutup saat berpindah halaman.
   const [openAt, setOpenAt] = useState<string | null>(null);
   const open = openAt === pathname;
+  // Menu Admin hanya untuk akun admin; halaman dan endpoint-nya tetap memeriksa sendiri di server.
+  const nav = auth.user?.admin ? [...links, { href: "/admin", label: "Admin" }] : links;
   const setOpen = (next: boolean) => setOpenAt(next ? pathname : null);
 
   useEffect(() => {
@@ -72,7 +74,7 @@ export function SiteHeader({ authEnabled = false }: { authEnabled?: boolean }) {
         </Link>
 
         <nav aria-label="Navigasi utama" className="hidden items-center md:flex">
-          {links.map((l) => {
+          {nav.map((l) => {
             const active = (l.href === "/docs" && pathname.startsWith("/docs")) || l.href === pathname;
             return (
               <Link
@@ -127,7 +129,7 @@ export function SiteHeader({ authEnabled = false }: { authEnabled?: boolean }) {
 
       <nav id="menu-seluler" aria-label="Navigasi seluler" data-open={open} className="panel border-t border-line bg-bg md:hidden">
         <ul className="mx-auto max-w-6xl px-4 py-2 sm:px-6">
-          {links.map((l) => (
+          {nav.map((l) => (
             <li key={l.href} className="border-b border-line last:border-b-0">
               <Link href={l.href} onClick={() => setOpen(false)} className="flex min-h-12 items-center text-base font-medium">
                 {l.label}

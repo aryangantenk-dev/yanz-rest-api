@@ -50,10 +50,22 @@ Login aktif bila tiga hal ini terpenuhi: Supabase terpasang (`supabase/schema.sq
 - **Foto profil opsional**: PNG, JPG, atau WebP. Browser memotongnya menjadi persegi 256 px sebelum diunggah. Selama belum diatur, tampil gambar pengganti berisi huruf pertama username. Berkas disimpan di bucket gambar (folder `avatars/`) dan tidak ikut kedaluwarsa.
 - **API key** dibuat saat akun dibuat. Bentuknya `yn-` diikuti 32 karakter acak: huruf besar, huruf kecil, angka, dan tiga simbol `_`, `.`, `-`. Contoh: `yn-7Kq2fXz9_Lm4RtHv3.pNc6Wd1J-b5YeQa0`. Hanya tiga simbol itu yang dipakai karena aman ditulis apa adanya di URL.
 - **Mengirim API key**: parameter `?apikey=yn-...`, header `x-api-key: yn-...`, atau `Authorization: Bearer yn-...`.
-- **Halaman `/akun`**: lihat, salin, dan ganti API key; ganti username; unggah atau hapus foto profil; keluar.
+- **Area anggota**: dashboard, paket, akun, dan panel admin memakai kerangka sendiri (menu samping), terpisah dari beranda dan dokumentasi, dan tiap bagian punya halamannya sendiri. Halaman masuk dan daftar juga berdiri sendiri tanpa menu situs.
+
+  | Halaman | Isi |
+  | --- | --- |
+  | `/dashboard` | Ringkasan pemakaian |
+  | `/dashboard/riwayat` | Riwayat permintaan |
+  | `/dashboard/api-key` | Lihat, salin, dan ganti API key |
+  | `/dashboard/undang` | Tautan referral dan hasilnya |
+  | `/paket` | Paket, limit tambahan, tukar kode, riwayat pesanan |
+  | `/akun` | Profil: username, foto, keluar |
+  | `/admin`, `/admin/akun`, `/admin/pesanan`, `/admin/kode`, `/admin/blokir-ip`, `/admin/blokir-api`, `/admin/blokir-endpoint`, `/admin/pembayaran` | Panel admin, satu halaman per bagian (hanya akun admin) |
+
+- **Halaman `/akun`**: ganti username; unggah atau hapus foto profil; keluar. Akun baru memilih username di sini. API key dilihat, disalin, dan diganti di `/dashboard/api-key`.
 - **Halaman `/dashboard`**: statistik API key milik akun yang sedang masuk. Isinya jumlah permintaan hari ini, 7 hari, 30 hari, dan total; diagram per hari (14 hari, dengan pilihan tampil sebagai tabel); endpoint yang paling sering dipakai; tingkat berhasil. Angkanya diperbarui otomatis tiap 10 detik selama tab terbuka dan terlihat (bisa dijeda lewat sakelar "Perbarui otomatis"), dan langsung menyusul saat tab dibuka lagi. Setelah masuk, pengguna diarahkan ke halaman ini. Pengunjung yang belum masuk melihat tulisan "Kamu belum login, login dahulu untuk mengecek statistik API key kamu." beserta tautan ke `/login`.
 - **Yang dihitung**: setiap permintaan ke `/api/...` yang membawa API key sah, dicatat per akun (bukan per key, jadi angkanya tetap setelah key diganti). Jawaban berkode 400 ke atas dihitung sebagai gagal. Permintaan yang ditolak sebelum key diperiksa (tanpa key, key salah, kena batas permintaan, IP diblokir) tidak dihitung. Hari dihitung menurut WIB. Rincian harian disimpan 90 hari; angka total tidak ikut terhapus. Datanya ada di tabel `api_usage` dan `api_usage_totals`.
-- **Riwayat permintaan**: `/dashboard` juga menampilkan 200 permintaan terakhir akun itu, dari yang paling baru: endpoint, waktu, lama proses, dan kode status, dengan saringan "Hanya yang gagal". Yang tercatat sama dengan yang dihitung di atas. Datanya ada di tabel `api_usage_log` (dibaca lewat `GET /api/auth/history` dengan sesi login); baris di luar 200 terakhir tiap akun dibuang otomatis. Admin bisa melihat riwayat akun mana pun lewat tombol **Riwayat API** di kartu akun pada halaman `/admin`, atau `/api/admin/userusage?email=…`.
+- **Riwayat permintaan**: `/dashboard/riwayat` menampilkan 200 permintaan terakhir akun itu, dari yang paling baru: endpoint, waktu, lama proses, dan kode status, dengan saringan "Hanya yang gagal". Yang tercatat sama dengan yang dihitung di atas. Datanya ada di tabel `api_usage_log` (dibaca lewat `GET /api/auth/history` dengan sesi login); baris di luar 200 terakhir tiap akun dibuang otomatis. Admin bisa melihat riwayat akun mana pun lewat tombol **Riwayat API** di kartu akun pada halaman `/admin`, atau `/api/admin/userusage?email=…`.
 - **Dokumentasi**: kolom API key di `/docs` terisi otomatis selama pengguna masuk, dan ikut tertulis di URL serta contoh kode setiap endpoint.
 - Tautan di dalam respons yang menunjuk ke API ini sendiri (`cek`, `next`, proxy gambar komik, halaman player) otomatis membawa API key pemanggilnya.
 
@@ -137,7 +149,7 @@ Pesanan disimpan di tabel `api_orders`. Untuk owner (butuh `ADMIN_KEY`):
 
 ### Kode hadiah
 
-Admin bisa membuat kode yang ditukar pengguna di halaman `/paket` ("Punya kode?"). Sebuah kode berisi paket (jenis paket dan jumlah hari), limit tambahan, atau keduanya. Kode dibuat dari tab **Kode** di `/admin`, atau lewat URL:
+Admin bisa membuat kode yang ditukar pengguna di halaman `/paket` ("Punya kode?"). Sebuah kode berisi paket (jenis paket dan jumlah hari), limit tambahan, atau keduanya. Kode dibuat dari halaman **Kode** (`/admin/kode`), atau lewat URL:
 
 ```
 /api/admin/codes?key=ADMIN_KEY                                        daftar kode, jumlah penukaran, dan lima penukar terakhir
@@ -159,7 +171,7 @@ Aturannya: satu akun hanya bisa menukar satu kode satu kali. Paket yang sama den
 
 ### Referral
 
-Setiap akun punya tautan referral `https://situs/daftar?ref=KODE`, terlihat di `/dashboard` ("Undang teman"). Orang yang membuka tautan itu lalu mendaftar tercatat sebagai undangan pemilik tautan. Setiap kali akun undangan itu melunasi pesanan (paket atau limit), pengundangnya mendapat limit tambahan sebesar `REFERRAL_PERCENT` persen dari nominal pesanan, dengan Rp1 dihitung sebagai 1 limit. Dengan nilai bawaan 10, pembelian Rp30.000 memberi 3.000 limit.
+Setiap akun punya tautan referral `https://situs/daftar?ref=KODE`, terlihat di `/dashboard/undang` ("Undang teman"). Orang yang membuka tautan itu lalu mendaftar tercatat sebagai undangan pemilik tautan. Setiap kali akun undangan itu melunasi pesanan (paket atau limit), pengundangnya mendapat limit tambahan sebesar `REFERRAL_PERCENT` persen dari nominal pesanan, dengan Rp1 dihitung sebagai 1 limit. Dengan nilai bawaan 10, pembelian Rp30.000 memberi 3.000 limit.
 
 - Besarnya diatur lewat `REFERRAL_PERCENT` di `src/lib/plans.ts`; 0 mematikan hadiahnya.
 - Kode dari tautan disimpan 30 hari di cookie `yn_ref` dan hanya dipakai untuk akun yang baru dibuat (kurang dari satu jam). Akun lama tidak bisa dijadikan undangan, dan orang tidak bisa mengundang dirinya sendiri.
@@ -185,7 +197,7 @@ Kunci juga bisa dikirim lewat header `x-admin-key`. Cara lain: hapus baris IP te
 
 ### Blokir API pengguna
 
-Admin bisa memblokir API satu akun, untuk sementara atau selamanya. Caranya lewat tab **Blokir API** di halaman `/admin` (atau tombol **Blokir API** di kartu akunnya), atau:
+Admin bisa memblokir API satu akun, untuk sementara atau selamanya. Caranya lewat halaman **Blokir API** (`/admin/blokir-api`, atau tombol **Blokir API** di kartu akunnya di `/admin/akun`), atau:
 
 | Endpoint | Fungsi |
 | --- | --- |
@@ -206,7 +218,7 @@ Ini berbeda dengan `userban`, yang menonaktifkan akunnya sekaligus (tanpa batas 
 
 ### Blokir endpoint
 
-Admin bisa menonaktifkan satu endpoint, atau satu kategori penuh, tanpa deploy ulang; misalnya saat sumber datanya sedang rusak. Caranya lewat tab **Blokir endpoint** di halaman `/admin`, atau:
+Admin bisa menonaktifkan satu endpoint, atau satu kategori penuh, tanpa deploy ulang; misalnya saat sumber datanya sedang rusak. Caranya lewat halaman **Blokir endpoint** (`/admin/blokir-endpoint`), atau:
 
 | Endpoint | Fungsi |
 | --- | --- |

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useAuth } from "./auth-client";
 import { ArrowIcon, RefreshIcon } from "./icons";
@@ -52,7 +53,7 @@ type ApiBlockRow = { path: string; reason: string; created_at: string | null; sc
 type ApiBlocks = { total: number; blocks: ApiBlockRow[] };
 type Payment = { plan_days: number; limit_price?: number; limit_step?: number; api_key_set: boolean; webhook_secret_set: boolean; fee_bearer: string; gateway_reachable: boolean; webhook_url: string };
 type Notice = { tone: "ok" | "danger"; text: string };
-type Tab = "akun" | "pesanan" | "kode" | "blokir" | "kunci" | "api" | "pembayaran";
+type Tab = "ringkasan" | "akun" | "pesanan" | "kode" | "blokir" | "kunci" | "api" | "pembayaran";
 
 /** Pilihan lama blokir API; nilainya dikirim apa adanya sebagai parameter `duration`. */
 const DURATIONS: { v: string; label: string }[] = [
@@ -73,14 +74,16 @@ const UNITS: { v: "m" | "h" | "d"; label: string; minutes: number }[] = [
 const MAX_BLOCK_MINUTES = 3650 * 1440;
 
 const STATUS_LABEL: Record<string, string> = { pending: "Menunggu pembayaran", paid: "Lunas", expired: "Kedaluwarsa", canceled: "Dibatalkan", failed: "Gagal dibuat" };
-const TABS: { id: Tab; label: string }[] = [
-  { id: "akun", label: "Akun" },
-  { id: "pesanan", label: "Pesanan" },
-  { id: "kode", label: "Kode" },
-  { id: "blokir", label: "Blokir IP" },
-  { id: "kunci", label: "Blokir API" },
-  { id: "api", label: "Blokir endpoint" },
-  { id: "pembayaran", label: "Pembayaran" },
+/** Bagian panel admin. Masing-masing punya halaman sendiri; `href` adalah alamatnya. */
+const TABS: { id: Tab; href: string; label: string; lead: string }[] = [
+  { id: "ringkasan", href: "/admin", label: "Admin", lead: "Ringkasan akun, pesanan, dan blokir yang sedang berlaku." },
+  { id: "akun", href: "/admin/akun", label: "Akun pengguna", lead: "Cari akun, atur paket dan limit tambahannya, lihat pemakaiannya, atau nonaktifkan." },
+  { id: "pesanan", href: "/admin/pesanan", label: "Pesanan", lead: "Pesanan paket dan limit tambahan, dari yang paling baru." },
+  { id: "kode", href: "/admin/kode", label: "Kode", lead: "Kode tukar untuk paket atau limit tambahan." },
+  { id: "blokir", href: "/admin/blokir-ip", label: "Blokir IP", lead: "Alamat IP yang ditolak di semua endpoint." },
+  { id: "kunci", href: "/admin/blokir-api", label: "Blokir API", lead: "Blokir API key satu akun, sementara atau selamanya." },
+  { id: "api", href: "/admin/blokir-endpoint", label: "Blokir endpoint", lead: "Matikan satu endpoint atau satu kategori untuk semua pengguna." },
+  { id: "pembayaran", href: "/admin/pembayaran", label: "Pembayaran", lead: "Status gerbang pembayaran QRIS." },
 ];
 
 const nf = new Intl.NumberFormat("id-ID");
@@ -231,12 +234,14 @@ function UserUsage({ email }: { email: string }) {
   );
 }
 
-function Frame({ children }: { children: React.ReactNode }) {
+function Frame({ tab = "ringkasan", children }: { tab?: Tab; children: React.ReactNode }) {
+  const page = TABS.find((t) => t.id === tab) ?? TABS[0];
   return (
     <div>
       <header className="mb-8">
-        <h1 className="font-mono text-[2rem] font-bold leading-tight tracking-tight sm:text-[2.5rem]">Admin</h1>
-        <p className="mt-3 max-w-[60ch] text-lg text-muted">Akun pengguna, pesanan paket, blokir IP, blokir API pengguna, blokir endpoint, dan status pembayaran.</p>
+        {tab !== "ringkasan" && <p className="font-mono text-sm font-bold uppercase tracking-wider text-muted">Admin</p>}
+        <h1 className="mt-1 font-mono text-[2rem] font-bold leading-tight tracking-tight">{page.label}</h1>
+        <p className="mt-2 max-w-[65ch] text-muted">{page.lead}</p>
       </header>
       {children}
     </div>
@@ -259,7 +264,10 @@ export function AdminPanel({
 }) {
   const auth = useAuth(authEnabled);
   const isAdmin = auth.user?.admin === true;
-  const [tab, setTab] = useState<Tab>("akun");
+  // Bagian yang digambar mengikuti alamat halaman (/admin, /admin/akun, ...), bukan state.
+  const pathname = usePathname();
+  const router = useRouter();
+  const tab: Tab = TABS.find((t) => t.href === pathname)?.id ?? "ringkasan";
   const [users, setUsers] = useState<Users | null>(null);
   const [orders, setOrders] = useState<Orders | null>(null);
   const [bans, setBans] = useState<Bans | null>(null);
@@ -277,7 +285,10 @@ export function AdminPanel({
   const [errors, setErrors] = useState<Partial<Record<Tab, string>>>({});
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const [notice, setNotice] = useState<Notice | null>(null);
+  // Pemberitahuan hasil aksi hanya tampil di halaman tempat aksinya dijalankan.
+  const [noticeAt, setNoticeAt] = useState<{ tab: Tab; notice: Notice | null }>({ tab: "ringkasan", notice: null });
+  const notice = noticeAt.tab === tab ? noticeAt.notice : null;
+  const setNotice = (next: Notice | null) => setNoticeAt({ tab, notice: next });
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
   /** Email akun yang riwayat penggunaannya sedang dibuka di tab Akun. */
@@ -444,9 +455,18 @@ export function AdminPanel({
     { label: "Pendapatan paket", value: orders ? rupiah(orders.paid_amount) : "-" },
     { label: "IP diblokir", value: bans ? fmt(bans.total) : "-" },
   ];
+  /** Angka kecil di samping nama bagian pada halaman ringkasan. */
+  const counts: Partial<Record<Tab, string>> = {
+    akun: users ? `${fmt(users.total)} akun` : undefined,
+    pesanan: orders ? `${fmt(orders.paid)} lunas` : undefined,
+    blokir: bans ? `${fmt(bans.total)} IP` : undefined,
+    kunci: keyBlocks ? `${fmt(keyBlocks.total)} akun` : undefined,
+    api: apiBlocks ? `${fmt(apiBlocks.total)} diblokir` : undefined,
+  };
+  const overviewError = errors.akun ?? errors.pesanan ?? errors.blokir ?? errors.kunci ?? errors.api ?? "";
 
   return (
-    <Frame>
+    <Frame tab={tab}>
       <div className="space-y-6" aria-busy={first || loading || undefined}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm text-muted">
@@ -458,41 +478,47 @@ export function AdminPanel({
           </button>
         </div>
 
-        <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {stats.map((s) => (
-            <div key={s.label} className="border border-line bg-card p-4">
-              <dt className="text-sm text-muted">{s.label}</dt>
-              <dd className="tnum mt-1 font-mono text-2xl font-bold">{first ? <span className="block h-8 w-16 animate-pulse bg-subtle" aria-hidden /> : s.value}</dd>
-            </div>
-          ))}
-        </dl>
-
         <p role="status" aria-live="polite" className={notice ? `border p-3 font-medium ${notice.tone === "danger" ? "border-danger text-danger" : "border-[var(--accent-edge)] bg-card text-fg"}` : "sr-only"}>
           {notice?.text}
         </p>
 
-        <div role="tablist" aria-label="Bagian panel admin" className="flex overflow-x-auto border-b border-line">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              role="tab"
-              id={`${ids}-tab-${t.id}`}
-              aria-selected={tab === t.id}
-              aria-controls={`${ids}-panel-${t.id}`}
-              onClick={() => setTab(t.id)}
-              className={`relative min-h-11 shrink-0 px-4 text-[0.9375rem] transition-colors duration-150 ${tab === t.id ? "font-semibold text-fg" : "text-muted hover:text-fg"}`}
-            >
-              {t.label}
-              {t.id === "api" && apiBlocks && apiBlocks.total > 0 ? ` (${fmt(apiBlocks.total)})` : ""}
-              {t.id === "kunci" && keyBlocks && keyBlocks.total > 0 ? ` (${fmt(keyBlocks.total)})` : ""}
-              {tab === t.id && <span className="absolute inset-x-4 bottom-0 h-0.5 bg-accent" aria-hidden />}
-            </button>
-          ))}
-        </div>
+        <div>
+          {tab !== "ringkasan" && tab !== "kode" && errors[tab] && <p className="mb-4 border border-danger p-3 font-medium text-danger">{errors[tab]}</p>}
 
-        <div role="tabpanel" id={`${ids}-panel-${tab}`} aria-labelledby={`${ids}-tab-${tab}`}>
-          {errors[tab] && <p className="mb-4 border border-danger p-3 font-medium text-danger">{errors[tab]}</p>}
+          {tab === "ringkasan" && (
+            <section className="space-y-6">
+              {overviewError && <p className="border border-danger p-3 font-medium text-danger">{overviewError}</p>}
+              <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                {stats.map((s) => (
+                  <div key={s.label} className="border border-line bg-card p-4">
+                    <dt className="text-sm text-muted">{s.label}</dt>
+                    <dd className="tnum mt-1 font-mono text-2xl font-bold">{first ? <span className="block h-8 w-16 animate-pulse bg-subtle" aria-hidden /> : s.value}</dd>
+                  </div>
+                ))}
+              </dl>
+              <nav aria-labelledby={`${ids}-bagian`}>
+                <h2 id={`${ids}-bagian`} className="font-mono text-lg font-bold">
+                  Bagian panel
+                </h2>
+                <ul className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {TABS.filter((t) => t.id !== "ringkasan").map((t) => (
+                    <li key={t.id}>
+                      <Link href={t.href} className="group flex h-full items-start gap-3 border border-line bg-card p-4 transition-colors duration-150 hover:border-control">
+                        <span className="min-w-0 flex-1">
+                          <span className="flex flex-wrap items-baseline gap-x-2">
+                            <span className="font-semibold group-hover:underline">{t.label}</span>
+                            {counts[t.id] !== undefined && <span className="tnum font-mono text-sm text-muted">{counts[t.id]}</span>}
+                          </span>
+                          <span className="mt-0.5 block text-sm text-muted">{t.lead}</span>
+                        </span>
+                        <ArrowIcon />
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </nav>
+            </section>
+          )}
 
           {tab === "akun" && (
             <section>
@@ -576,9 +602,9 @@ export function AdminPanel({
                           <button
                             type="button"
                             onClick={() => {
+                              // Akunnya dibawa ke formulir di halaman Blokir API.
                               setKbWho(u.email);
-                              setNotice(null);
-                              setTab("kunci");
+                              router.push("/admin/blokir-api");
                             }}
                             className="btn btn-secondary"
                           >

@@ -5,43 +5,18 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useAuth } from "./auth-client";
 import { Avatar } from "./avatar";
-import { CloseIcon, LogoMark, MenuIcon, MoonIcon, SunIcon, UserIcon } from "./icons";
+import { ChartIcon, CloseIcon, LogoMark, MenuIcon } from "./icons";
+import { ThemeToggle } from "./theme-toggle";
 
 /** `wide`: di deretan menu atas hanya tampil pada layar lebar (lg), supaya menunya muat di tablet. Menu seluler selalu memuat semuanya. */
 const links: { href: string; label: string; wide?: boolean }[] = [
   { href: "/docs", label: "Dokumentasi" },
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/paket", label: "Paket" },
   { href: "/#kategori", label: "Kategori" },
   { href: "/#mulai", label: "Cara pakai", wide: true },
   { href: "/#contoh", label: "Contoh", wide: true },
   { href: "/#faq", label: "FAQ" },
+  { href: "/paket", label: "Paket" },
 ];
-
-/** Tombol tema: ikon diatur lewat CSS (.only-light / .only-dark), jadi tidak perlu state. */
-function ThemeToggle() {
-  return (
-    <button
-      type="button"
-      aria-label="Ganti tema terang atau gelap"
-      title="Ganti tema"
-      onClick={() => {
-        const root = document.documentElement;
-        const next = getComputedStyle(root).colorScheme.includes("dark") ? "light" : "dark";
-        root.dataset.theme = next;
-        try {
-          localStorage.setItem("theme", next);
-        } catch {
-          /* penyimpanan diblokir: tema tetap berganti untuk sesi ini */
-        }
-      }}
-      className="grid h-11 w-11 place-items-center text-muted transition-colors duration-150 hover:bg-subtle hover:text-fg"
-    >
-      <MoonIcon className="only-light" />
-      <SunIcon className="only-dark" />
-    </button>
-  );
-}
 
 export function SiteHeader({ authEnabled = false }: { authEnabled?: boolean }) {
   const pathname = usePathname();
@@ -50,8 +25,8 @@ export function SiteHeader({ authEnabled = false }: { authEnabled?: boolean }) {
   // Menu seluler terikat ke halaman tempat ia dibuka, jadi otomatis tertutup saat berpindah halaman.
   const [openAt, setOpenAt] = useState<string | null>(null);
   const open = openAt === pathname;
-  // Menu Admin hanya untuk akun admin; halaman dan endpoint-nya tetap memeriksa sendiri di server.
-  const nav = auth.user?.admin ? [...links, { href: "/admin", label: "Admin" }] : links;
+  // Dashboard, API key, akun, dan admin ada di area anggota (/dashboard) dengan menunya sendiri.
+  const nav = links;
   const setOpen = (next: boolean) => setOpenAt(next ? pathname : null);
 
   useEffect(() => {
@@ -96,21 +71,13 @@ export function SiteHeader({ authEnabled = false }: { authEnabled?: boolean }) {
               sehingga pilihannya sudah benar sejak halaman pertama kali digambar. Lebarnya sama. */}
           {authEnabled && (
             <>
-              <Link
-                href="/login"
-                onClick={() => setOpen(false)}
-                aria-current={pathname === "/login" ? "page" : undefined}
-                // Di halaman login dan daftar tombol utamanya ada di formulir, jadi tombol ini tidak ikut menonjol.
-                className={`only-guest btn relative min-w-[5.75rem] px-3 ${pathname === "/login" || pathname === "/daftar" ? "btn-secondary" : "btn-primary"}`}
-              >
+              <Link href="/login" onClick={() => setOpen(false)} className="only-guest btn btn-primary min-w-[5.75rem] px-3">
                 Masuk
-                {pathname === "/login" && <span className="absolute inset-x-0 -bottom-2 h-0.5 bg-fg" aria-hidden />}
               </Link>
-              <Link href="/akun" onClick={() => setOpen(false)} aria-current={pathname === "/akun" ? "page" : undefined} className="only-signed btn btn-secondary relative min-w-[5.75rem] px-3">
+              <Link href="/dashboard" onClick={() => setOpen(false)} className="only-signed btn btn-primary relative min-w-[5.75rem] px-3">
                 {/* Foto profil menggantikan ikon bila sudah diatur; lebar tombol tetap (min-w). */}
-                {auth.user?.photo ? <Avatar photo={auth.user.photo} name={auth.user.username} className="h-6 w-6 text-xs" /> : <UserIcon />}
-                Akun
-                {pathname === "/akun" && <span className="absolute inset-x-0 -bottom-2 h-0.5 bg-fg" aria-hidden />}
+                {auth.user?.photo ? <Avatar photo={auth.user.photo} name={auth.user.username} className="h-6 w-6 text-xs" /> : <ChartIcon />}
+                Dashboard
               </Link>
             </>
           )}

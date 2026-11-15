@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { refreshAuth, useAuth, type AuthUser } from "./auth-client";
+import { refreshAuth, type AuthUser } from "./auth-client";
 import { ReferralCard } from "./rewards";
 import { ApiBlockNotice } from "./api-block-notice";
 import { Avatar } from "./avatar";
-import { CopyButton } from "./client-utils";
-import { ArrowIcon, RefreshIcon, UserIcon } from "./icons";
+import { ArrowIcon, ClockIcon, KeyIcon, RefreshIcon } from "./icons";
+import { MemberGate, PageHead } from "./member-gate";
 import { HistoryList, type HistoryRow } from "./usage-history";
 
 type Day = { day: string; hits: number; errors: number };
@@ -31,7 +31,6 @@ type Usage = {
 /** Paket yang sedang berlaku untuk akun ini (dari /api/auth/usage). */
 type PlanInfo = { id: string; name: string; daily: number; perMinute: number; paid: boolean; expires_at: string | null; /** Tanpa kuota harian: akun admin (id "admin") atau paket tanpa batas. */ unlimited?: boolean; /** Saldo limit tambahan. */ extra?: number };
 
-const LOGIN_HREF = "/login?next=/dashboard";
 /** Jeda pembaruan otomatis. Saat gagal, jedanya digandakan sampai paling lama POLL_MAX_MS. */
 const POLL_MS = 10_000;
 const POLL_MAX_MS = 60_000;
@@ -45,7 +44,6 @@ const readAuto = () => {
     return true;
   }
 };
-const mask = (key: string) => `${key.slice(0, 3)}${"•".repeat(12)}${key.slice(-4)}`;
 const nf = new Intl.NumberFormat("id-ID");
 const fmt = (n: number) => nf.format(n);
 
@@ -57,15 +55,6 @@ const dayNum = (day: string) => String(Number(day.slice(8, 10)));
 const moment = (iso: string) => new Date(iso).toLocaleString("id-ID", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
 const failedText = (errors: number) => (errors > 0 ? `${fmt(errors)} gagal` : "Tidak ada yang gagal");
-
-/** Kerangka halaman: judul selalu sama di semua keadaan supaya halaman tidak melompat saat data tiba. */
-function Shell({ children, busy = false }: { children: React.ReactNode; busy?: boolean }) {
-  return (
-    <div className="border border-line bg-card p-5 sm:p-8" aria-busy={busy || undefined}>
-      {children}
-    </div>
-  );
-}
 
 function Skeleton({ label }: { label: string }) {
   return (
@@ -233,64 +222,108 @@ function TopEndpoints({ top }: { top: Top[] }) {
 }
 
 /**
- * Riwayat permintaan terakhir. Dimuat ulang setiap kali `version` berubah, yaitu saat ringkasan
- * di atasnya menunjukkan ada permintaan baru; jadi pembaruan otomatis tidak memuatnya sia-sia.
+ * Halaman riwayat: permintaan terakhir yang memakai API key akun ini. Dimuat saat halaman dibuka,
+ * saat tombol Perbarui ditekan, dan saat tab ini kembali terlihat.
  */
-function History({ version }: { version: string }) {
+function History() {
   const [rows, setRows] = useState<HistoryRow[] | null>(null);
   const [kept, setKept] = useState(200);
   const [error, setError] = useState("");
-  const [retry, setRetry] = useState(0);
+  const [busy, setBusy] = useState(true);
+  const [at, setAt] = useState("");
+  const alive = useRef(true);
+  const lastTry = useRef(0);
+
+  const load = useCallback(async () => {
+    lastTry.current = Date.now();
+    try {
+      const r = await fetch("/api/auth/history", { cache: "no-store", credentials: "same-origin" });
+      const body = (await r.json().catch(() => ({}))) as { history?: HistoryRow[]; kept?: number; error?: string };
+      if (!alive.current) return;
+      if (r.status === 401) {
+        void refreshAuth();
+        return;
+      }
+      if (!r.ok || !Array.isArray(body.history)) {
+        setError(body.error ?? "Riwayat belum bisa dimuat.");
+        return;
+      }
+      setRows(body.history);
+      if (body.kept) setKept(body.kept);
+      setError("");
+      setAt(new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+    } catch {
+      if (alive.current) setError("Tidak dapat terhubung ke server. Periksa koneksimu, lalu coba lagi.");
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let off = false;
-    void (async () => {
-      try {
-        const r = await fetch("/api/auth/history", { cache: "no-store", credentials: "same-origin" });
-        const body = (await r.json().catch(() => ({}))) as { history?: HistoryRow[]; kept?: number; error?: string };
-        if (off) return;
-        if (!r.ok || !Array.isArray(body.history)) {
-          setError(body.error ?? "Riwayat belum bisa dimuat.");
-          return;
-        }
-        setRows(body.history);
-        if (body.kept) setKept(body.kept);
-        setError("");
-      } catch {
-        if (!off) setError("Tidak dapat terhubung ke server. Periksa koneksimu, lalu coba lagi.");
-      }
-    })();
-    return () => {
-      off = true;
+    alive.current = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- memuat data dari server saat halaman dibuka
+    void load();
+    const wake = () => {
+      if (document.visibilityState === "visible" && Date.now() - lastTry.current >= WAKE_GAP_MS) void load();
     };
-  }, [version, retry]);
+    document.addEventListener("visibilitychange", wake);
+    return () => {
+      alive.current = false;
+      document.removeEventListener("visibilitychange", wake);
+    };
+  }, [load]);
+
+  const refresh = () => {
+    setBusy(true);
+    void load();
+  };
 
   return (
-    <section aria-labelledby="dash-riwayat" className="border border-line bg-card p-4 sm:p-6">
-      <h2 id="dash-riwayat" className="font-mono text-lg font-bold">
-        Riwayat permintaan
-      </h2>
-      <p className="tnum mt-1 max-w-[70ch] text-sm text-muted">
-        Sampai {fmt(kept)} permintaan terakhir, dari yang paling baru. Permintaan yang ditolak sebelum diproses (kuota habis, batas per menit, API key diblokir) tidak tercatat.
-      </p>
-      <div className="mt-3">
-        {error && (
-          <div className="mb-3 flex flex-col gap-3 border border-danger p-3 sm:flex-row sm:items-center sm:justify-between" role="alert">
-            <p className="font-medium text-danger">{rows ? `${error} Daftar di bawah mungkin sudah tertinggal.` : error}</p>
-            <button type="button" onClick={() => setRetry((n) => n + 1)} className="btn btn-secondary shrink-0">
-              Coba lagi
-            </button>
-          </div>
-        )}
-        {!rows && !error && <div className="h-40 animate-pulse bg-subtle" aria-hidden />}
-        {rows && rows.length === 0 && <p className="text-muted">Belum ada riwayat. Permintaan berikutnya yang memakai API key kamu akan muncul di sini.</p>}
-        {rows && rows.length > 0 && <HistoryList rows={rows} />}
-      </div>
-    </section>
+    <div className="space-y-6">
+      <PageHead title="Riwayat" lead={`Sampai ${fmt(kept)} permintaan terakhir yang memakai API key kamu, dari yang paling baru.`}>
+        <button type="button" onClick={refresh} disabled={busy} className="btn btn-secondary">
+          <RefreshIcon className={busy ? "spin" : ""} />
+          {busy ? "Memuat…" : "Perbarui"}
+        </button>
+      </PageHead>
+
+      <section aria-labelledby="dash-riwayat" className="border border-line bg-card p-4 sm:p-6">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          <h2 id="dash-riwayat" className="font-mono text-lg font-bold">
+            Permintaan terakhir
+          </h2>
+          <p className="tnum text-sm text-muted" role="status">
+            {at ? `Dimuat pukul ${at}` : ""}
+          </p>
+        </div>
+        <p className="mt-1 max-w-[70ch] text-sm text-muted">Permintaan yang ditolak sebelum diproses (kuota habis, batas per menit, API key diblokir) tidak tercatat.</p>
+        <div className="mt-3">
+          {error && (
+            <div className="mb-3 flex flex-col gap-3 border border-danger p-3 sm:flex-row sm:items-center sm:justify-between" role="alert">
+              <p className="font-medium text-danger">{rows ? `${error} Daftar di bawah mungkin sudah tertinggal.` : error}</p>
+              <button type="button" onClick={refresh} disabled={busy} className="btn btn-secondary shrink-0">
+                Coba lagi
+              </button>
+            </div>
+          )}
+          {!rows && !error && <div className="h-40 animate-pulse bg-subtle" aria-hidden />}
+          {rows && rows.length === 0 && (
+            <div>
+              <p className="text-muted">Belum ada riwayat. Permintaan berikutnya yang memakai API key kamu akan muncul di sini.</p>
+              <Link href="/docs" className="btn btn-primary mt-4 w-full sm:w-auto">
+                Coba endpoint pertama
+                <ArrowIcon />
+              </Link>
+            </div>
+          )}
+          {rows && rows.length > 0 && <HistoryList rows={rows} />}
+        </div>
+      </section>
+    </div>
   );
 }
 
-function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
+function Stats({ user }: { user: AuthUser }) {
   const [usage, setUsage] = useState<Usage | null>(null);
   const [limit, setLimit] = useState<number | null>(null);
   const [plan, setPlan] = useState<PlanInfo | null>(null);
@@ -444,10 +477,6 @@ function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
             <RefreshIcon className={busy ? "spin" : ""} />
             {busy ? "Memuat…" : "Perbarui"}
           </button>
-          <Link href="/akun" className="btn btn-secondary">
-            <UserIcon />
-            Kelola akun
-          </Link>
         </div>
       </header>
 
@@ -624,103 +653,64 @@ function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
                   </dl>
                 </section>
               </div>
-              <History version={`${usage.total}|${usage.last_at ?? ""}`} />
             </>
           )}
 
-          <section aria-labelledby="dash-key" className="border border-line bg-card p-4 sm:p-6">
-            <h2 id="dash-key" className="font-mono text-lg font-bold">
-              API key kamu
-            </h2>
-            <div className="mt-3 flex items-stretch border border-control bg-bg">
-              <code className="wrap-anywhere tnum min-w-0 flex-1 self-center px-3 py-2 font-mono text-base text-fg" aria-label="API key, disembunyikan">
-                {mask(apiKey)}
-              </code>
-              <CopyButton text={apiKey} />
-            </div>
-            <p className="mt-2 text-sm text-muted">
-              Statistik dicatat per akun, jadi angkanya tetap ada setelah API key diganti. Lihat atau ganti key di halaman{" "}
-              <Link href="/akun" className="link font-medium text-fg">
-                Akun
-              </Link>
-              .
-            </p>
-          </section>
+          {/* Riwayat dan API key punya halaman sendiri; di sini cukup jalan pintasnya. */}
+          <nav aria-label="Halaman lain" className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Link href="/dashboard/riwayat" className="group flex items-center gap-3 border border-line bg-card p-4 transition-colors duration-150 hover:border-control">
+              <ClockIcon className="shrink-0 text-muted" />
+              <span className="min-w-0 flex-1">
+                <span className="block font-semibold group-hover:underline">Riwayat permintaan</span>
+                <span className="block text-sm text-muted">Endpoint, waktu, dan kode status tiap permintaan.</span>
+              </span>
+              <ArrowIcon />
+            </Link>
+            <Link href="/dashboard/api-key" className="group flex items-center gap-3 border border-line bg-card p-4 transition-colors duration-150 hover:border-control">
+              <KeyIcon className="h-[18px] w-[18px] shrink-0 text-muted" />
+              <span className="min-w-0 flex-1">
+                <span className="block font-semibold group-hover:underline">API key</span>
+                <span className="block text-sm text-muted">Lihat, salin, atau ganti API key kamu.</span>
+              </span>
+              <ArrowIcon />
+            </Link>
+          </nav>
         </>
       )}
-
-      <ReferralCard />
     </div>
   );
 }
 
+const GUEST = "Kamu belum login, login dahulu untuk mengecek statistik API key kamu.";
+
+/** Halaman /dashboard: ringkasan pemakaian. */
 export function DashboardPanel({ authEnabled }: { authEnabled: boolean }) {
-  const auth = useAuth(authEnabled);
+  return (
+    <MemberGate authEnabled={authEnabled} title="Dashboard" path="/dashboard" guest={GUEST} off="Login belum diaktifkan di server ini, jadi statistik per API key belum dicatat.">
+      {(user) => <Stats user={user} />}
+    </MemberGate>
+  );
+}
 
-  if (!authEnabled) {
-    return (
-      <Shell>
-        <h1 className="font-mono text-2xl font-bold tracking-tight sm:text-[2rem]">Dashboard</h1>
-        <p className="mt-3 max-w-[60ch] text-muted">Login belum diaktifkan di server ini, jadi statistik per API key belum dicatat.</p>
-        <Link href="/docs" className="btn btn-secondary mt-6 w-full sm:w-auto">
-          Buka dokumentasi
-          <ArrowIcon />
-        </Link>
-      </Shell>
-    );
-  }
+/** Halaman /dashboard/riwayat. */
+export function HistoryPanel({ authEnabled }: { authEnabled: boolean }) {
+  return (
+    <MemberGate authEnabled={authEnabled} title="Riwayat" path="/dashboard/riwayat" guest="Kamu belum login, login dahulu untuk melihat riwayat permintaan API key kamu." off="Login belum diaktifkan di server ini, jadi riwayat per API key belum dicatat.">
+      {() => <History />}
+    </MemberGate>
+  );
+}
 
-  if (auth.status === "loading") {
-    return <Skeleton label="Memuat dashboard" />;
-  }
-
-  if (auth.status === "error" && !auth.user) {
-    return (
-      <Shell>
-        <h1 className="font-mono text-2xl font-bold tracking-tight sm:text-[2rem]">Dashboard belum bisa dimuat</h1>
-        <p role="alert" className="mt-3 text-muted">
-          Server akun sedang tidak dapat dihubungi. Periksa koneksimu, lalu coba lagi.
-        </p>
-        <button type="button" onClick={() => void refreshAuth()} className="btn btn-primary mt-6 w-full sm:w-auto">
-          Coba lagi
-        </button>
-      </Shell>
-    );
-  }
-
-  if (!auth.user) {
-    return (
-      <Shell>
-        <h1 className="font-mono text-2xl font-bold tracking-tight sm:text-[2rem]">Dashboard</h1>
-        <p id="dash-tamu" className="mt-3 max-w-[60ch] text-lg">
-          Kamu belum login, login dahulu untuk mengecek statistik API key kamu.
-        </p>
-        <Link href={LOGIN_HREF} className="btn btn-primary mt-6 w-full sm:w-auto">
-          Login
-          <ArrowIcon />
-        </Link>
-        <p className="mt-4 flex flex-wrap items-center gap-x-2 border-t border-line pt-2 text-muted">
-          Belum punya akun?
-          <Link href="/daftar?next=/dashboard" className="link inline-flex min-h-11 items-center font-semibold text-fg">
-            Daftar
-          </Link>
-        </p>
-      </Shell>
-    );
-  }
-
-  if (auth.needsUsername || !auth.apiKey) {
-    return (
-      <Shell>
-        <h1 className="font-mono text-2xl font-bold tracking-tight sm:text-[2rem]">Dashboard</h1>
-        <p className="mt-3 max-w-[60ch] text-lg">Pilih username dulu. API key dan statistiknya baru aktif setelah username diisi.</p>
-        <Link href="/akun?next=/dashboard" className="btn btn-primary mt-6 w-full sm:w-auto">
-          Pilih username
-          <ArrowIcon />
-        </Link>
-      </Shell>
-    );
-  }
-
-  return <Stats user={auth.user} apiKey={auth.apiKey} />;
+/** Halaman /dashboard/undang. */
+export function ReferralPanel({ authEnabled }: { authEnabled: boolean }) {
+  return (
+    <MemberGate authEnabled={authEnabled} title="Undang teman" path="/dashboard/undang" guest="Kamu belum login, login dahulu untuk mendapat tautan undanganmu.">
+      {() => (
+        <div className="space-y-6">
+          <PageHead title="Undang teman" lead="Ajak teman memakai yanz.api lewat tautanmu, dan dapatkan limit tambahan dari setiap pembelian mereka." />
+          <ReferralCard />
+        </div>
+      )}
+    </MemberGate>
+  );
 }

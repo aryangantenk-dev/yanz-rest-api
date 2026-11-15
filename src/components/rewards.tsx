@@ -145,7 +145,7 @@ export function RedeemForm({ signedIn, needsUsername, loginHref, onDone }: { sig
 
 type Referral = { code: string; link: string; percent: number; earned: number; invited: number; buyers: number; rewards: { at: string; amount: number }[] };
 
-/** Kartu referral di /dashboard: tautan undangan milik akun ini dan hasilnya. */
+/** Kartu referral di /dashboard/undang: tautan undangan milik akun ini dan hasilnya. */
 export function ReferralCard() {
   const [data, setData] = useState<Referral | null>(null);
   const [error, setError] = useState("");
@@ -170,7 +170,7 @@ export function ReferralCard() {
   return (
     <section aria-labelledby="dash-referral" className="border border-line bg-card p-4 sm:p-6">
       <h2 id="dash-referral" className="font-mono text-lg font-bold">
-        Undang teman
+        Tautan undanganmu
       </h2>
       {data ? (
         <>

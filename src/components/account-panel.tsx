@@ -7,7 +7,8 @@ import { refreshAuth, setSession, signOut, useAuth, type AuthUser, type SessionB
 import { ApiBlockNotice } from "./api-block-notice";
 import { Avatar } from "./avatar";
 import { CopyButton, useOrigin } from "./client-utils";
-import { ArrowIcon, CameraIcon, ChartIcon, EyeIcon, EyeOffIcon, LogoutIcon, RefreshIcon, TrashIcon } from "./icons";
+import { ArrowIcon, CameraIcon, EyeIcon, EyeOffIcon, KeyIcon, LogoutIcon, RefreshIcon, TrashIcon } from "./icons";
+import { MemberGate, PageHead } from "./member-gate";
 import { UsernameField, useUsername } from "./username-field";
 
 const mask = (key: string) => `${key.slice(0, 3)}${"•".repeat(12)}${key.slice(-4)}`;
@@ -62,8 +63,8 @@ function UsernameStep({ user }: { user: AuthUser }) {
     setError(null);
     const { ok, body } = await sendJson("username", { username: uname.name });
     if (ok) {
-      const next = nextFromQuery();
-      if (next) router.replace(next);
+      // Tanpa tujuan khusus, akun baru dibawa ke halaman API key: itu yang dicari setelah mendaftar.
+      router.replace(nextFromQuery() ?? "/dashboard/api-key");
       return;
     }
     setBusy(null);
@@ -267,25 +268,17 @@ function UsernameEditor({ user }: { user: AuthUser }) {
   );
 }
 
-export function AccountPanel({ fallback }: { fallback: string }) {
+/** Halaman /akun: profil (foto, username, data akun) dan tombol keluar. Akun baru memilih username di sini. */
+export function AccountPanel() {
   const router = useRouter();
-  const origin = useOrigin(fallback);
   const auth = useAuth();
-  const [shown, setShown] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState<"rotate" | "logout" | null>(null);
-  const [message, setMessage] = useState<Message | null>(null);
-  const confirmRef = useRef<HTMLButtonElement>(null);
-  const rotateRef = useRef<HTMLButtonElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
 
   const signedOut = auth.status === "ready" && !auth.user;
   useEffect(() => {
     if (signedOut) router.replace("/login?next=/akun");
   }, [signedOut, router]);
-
-  useEffect(() => {
-    if (confirming) confirmRef.current?.focus();
-  }, [confirming]);
 
   if (auth.status === "error" && !auth.user) {
     return (
@@ -321,34 +314,16 @@ export function AccountPanel({ fallback }: { fallback: string }) {
   }
 
   const user = auth.user;
-  const key = auth.apiKey;
-  const exampleReal = `${origin}/api/random/quote?apikey=${key}`;
-  const exampleShown = `${origin}/api/random/quote?apikey=${shown ? key : mask(key)}`;
   const joined = new Date(user.created_at).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" });
 
-  async function rotate() {
-    setBusy("rotate");
-    setMessage(null);
-    const { ok, status, body } = await send("regenerate", {});
-    if (ok) {
-      setShown(true);
-      setMessage({ ok: true, text: "API key baru sudah aktif. Key lama berhenti berfungsi dalam satu menit; perbarui aplikasi yang masih memakainya." });
-    } else {
-      setMessage({ ok: false, text: status === 0 ? "Tidak dapat terhubung ke server. API key belum diganti; coba lagi." : (body.error ?? "API key gagal diganti. Coba lagi.") });
-    }
-    setBusy(null);
-    setConfirming(false);
-    rotateRef.current?.focus();
-  }
-
   async function logout() {
-    setBusy("logout");
-    setMessage(null);
+    setBusy(true);
+    setMessage("");
     const ok = await signOut();
     if (ok) router.replace("/login");
     else {
-      setBusy(null);
-      setMessage({ ok: false, text: "Belum berhasil keluar karena server tidak dapat dihubungi. Coba lagi." });
+      setBusy(false);
+      setMessage("Belum berhasil keluar karena server tidak dapat dihubungi. Coba lagi.");
     }
   }
 
@@ -368,58 +343,6 @@ export function AccountPanel({ fallback }: { fallback: string }) {
       </header>
 
       <ApiBlockNotice block={user.api_block} />
-
-      <section aria-labelledby="akun-key" className="border border-control bg-card p-4 sm:p-6">
-        <h2 id="akun-key" className="font-mono text-lg font-bold">
-          API key kamu
-        </h2>
-        <p className="mt-1 text-sm text-muted">Tambahkan sebagai parameter apikey di setiap permintaan. Jangan bagikan: siapa pun yang punya key ini memakai jatahmu.</p>
-
-        <div className="mt-4 flex items-stretch border border-control bg-bg">
-          <code className="wrap-anywhere tnum min-w-0 flex-1 self-center px-3 py-2 font-mono text-base text-fg" aria-label={shown ? "API key" : "API key, disembunyikan"}>
-            {shown ? key : mask(key)}
-          </code>
-          <button
-            type="button"
-            onClick={() => setShown(!shown)}
-            aria-pressed={shown}
-            aria-label={shown ? "Sembunyikan API key" : "Tampilkan API key"}
-            title={shown ? "Sembunyikan" : "Tampilkan"}
-            className="grid min-h-11 w-11 shrink-0 place-items-center text-muted transition-colors duration-150 hover:bg-subtle hover:text-fg"
-          >
-            {shown ? <EyeOffIcon /> : <EyeIcon />}
-          </button>
-          <CopyButton text={key} />
-        </div>
-
-        <h3 className="mt-5 text-sm font-semibold">Contoh pemakaian</h3>
-        <div className="mt-2 flex items-center border border-line bg-bg">
-          <code className="wrap-anywhere min-w-0 flex-1 px-3 py-2 font-mono text-sm text-muted">{exampleShown}</code>
-          <CopyButton text={exampleReal} label="URL" />
-        </div>
-        <p className="mt-2 text-sm text-muted">
-          Lebih suka header? Kirim <code className="font-mono text-fg">x-api-key: yn-…</code> sebagai gantinya.
-        </p>
-
-        <div className="mt-5 flex flex-col gap-2 sm:flex-row">
-          <Link href="/docs" className="btn btn-primary">
-            Coba di dokumentasi
-            <ArrowIcon />
-          </Link>
-          <Link href="/dashboard" className="btn btn-secondary">
-            <ChartIcon />
-            Lihat statistik
-          </Link>
-          <Link href="/paket" className="btn btn-secondary">
-            Paket dan kuota
-          </Link>
-        </div>
-        <p className="mt-2 text-sm text-muted">Kolom API key di dokumentasi terisi otomatis selama kamu masuk.</p>
-      </section>
-
-      <p role="status" className={`text-sm font-medium ${message ? (message.ok ? "border border-ok p-3 text-ok" : "border border-danger p-3 text-danger") : "sr-only"}`}>
-        {message?.text}
-      </p>
 
       <section aria-labelledby="akun-profil" className="border border-line bg-card p-4 sm:p-6">
         <h2 id="akun-profil" className="font-mono text-lg font-bold">
@@ -451,14 +374,136 @@ export function AccountPanel({ fallback }: { fallback: string }) {
             <dd className="tnum mt-0.5 font-medium">{joined}</dd>
           </div>
         </dl>
-        <button type="button" onClick={() => void logout()} disabled={busy !== null} className="btn btn-secondary mt-5 w-full sm:w-auto">
-          <LogoutIcon />
-          {busy === "logout" ? "Keluar…" : "Keluar"}
-        </button>
       </section>
 
-      <section aria-labelledby="akun-ganti" className="border border-line bg-card p-4 sm:p-6">
-        <h2 id="akun-ganti" className="font-mono text-lg font-bold">
+      <section aria-labelledby="akun-key" className="border border-line bg-card p-4 sm:p-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <h2 id="akun-key" className="font-mono text-lg font-bold">
+              API key
+            </h2>
+            <p className="mt-1 text-sm text-muted">Melihat, menyalin, dan mengganti API key ada di halamannya sendiri.</p>
+          </div>
+          <Link href="/dashboard/api-key" className="btn btn-secondary shrink-0">
+            <KeyIcon className="h-[18px] w-[18px]" />
+            Buka API key
+          </Link>
+        </div>
+      </section>
+
+      <section aria-labelledby="akun-keluar" className="border border-line bg-card p-4 sm:p-6">
+        <h2 id="akun-keluar" className="font-mono text-lg font-bold">
+          Keluar
+        </h2>
+        <p className="mt-1 text-sm text-muted">Mengakhiri sesi di browser ini. API key kamu tetap berlaku.</p>
+        <p role="alert" className={message ? "mt-3 border border-danger p-3 text-sm font-medium text-danger" : "sr-only"}>
+          {message}
+        </p>
+        <button type="button" onClick={() => void logout()} disabled={busy} className="btn btn-secondary mt-4 w-full sm:w-auto">
+          <LogoutIcon />
+          {busy ? "Keluar…" : "Keluar"}
+        </button>
+      </section>
+    </div>
+  );
+}
+
+/** Isi halaman /dashboard/api-key: API key akun ini, contoh pemakaiannya, dan penggantiannya. */
+function ApiKey({ user, apiKey: key, fallback }: { user: AuthUser; apiKey: string; fallback: string }) {
+  const origin = useOrigin(fallback);
+  const [shown, setShown] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<Message | null>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  const rotateRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (confirming) confirmRef.current?.focus();
+  }, [confirming]);
+
+  const exampleReal = `${origin}/api/random/quote?apikey=${key}`;
+  const exampleShown = `${origin}/api/random/quote?apikey=${shown ? key : mask(key)}`;
+
+  async function rotate() {
+    setBusy(true);
+    setMessage(null);
+    const { ok, status, body } = await send("regenerate", {});
+    if (ok) {
+      setShown(true);
+      setMessage({ ok: true, text: "API key baru sudah aktif. Key lama berhenti berfungsi dalam satu menit; perbarui aplikasi yang masih memakainya." });
+    } else {
+      setMessage({ ok: false, text: status === 0 ? "Tidak dapat terhubung ke server. API key belum diganti; coba lagi." : (body.error ?? "API key gagal diganti. Coba lagi.") });
+    }
+    setBusy(false);
+    setConfirming(false);
+    rotateRef.current?.focus();
+  }
+
+  return (
+    <div className="space-y-6">
+      <PageHead
+        title="API key"
+        lead={
+          <>
+            Kunci untuk memanggil semua endpoint atas nama <strong className="font-mono font-semibold text-fg">@{user.username}</strong>.
+          </>
+        }
+      />
+
+      <ApiBlockNotice block={user.api_block} />
+
+      <section aria-labelledby="key-milik" className="border border-control bg-card p-4 sm:p-6">
+        <h2 id="key-milik" className="font-mono text-lg font-bold">
+          API key kamu
+        </h2>
+        <p className="mt-1 text-sm text-muted">Tambahkan sebagai parameter apikey di setiap permintaan. Jangan bagikan: siapa pun yang punya key ini memakai jatahmu.</p>
+
+        <div className="mt-4 flex items-stretch border border-control bg-bg">
+          <code className="wrap-anywhere tnum min-w-0 flex-1 self-center px-3 py-2 font-mono text-base text-fg" aria-label={shown ? "API key" : "API key, disembunyikan"}>
+            {shown ? key : mask(key)}
+          </code>
+          <button
+            type="button"
+            onClick={() => setShown(!shown)}
+            aria-pressed={shown}
+            aria-label={shown ? "Sembunyikan API key" : "Tampilkan API key"}
+            title={shown ? "Sembunyikan" : "Tampilkan"}
+            className="grid min-h-11 w-11 shrink-0 place-items-center text-muted transition-colors duration-150 hover:bg-subtle hover:text-fg"
+          >
+            {shown ? <EyeOffIcon /> : <EyeIcon />}
+          </button>
+          <CopyButton text={key} />
+        </div>
+        <p className="mt-2 text-sm text-muted">Statistik dicatat per akun, jadi angkanya tetap ada setelah API key diganti.</p>
+      </section>
+
+      <section aria-labelledby="key-contoh" className="border border-line bg-card p-4 sm:p-6">
+        <h2 id="key-contoh" className="font-mono text-lg font-bold">
+          Contoh pemakaian
+        </h2>
+        <div className="mt-3 flex items-center border border-line bg-bg">
+          <code className="wrap-anywhere min-w-0 flex-1 px-3 py-2 font-mono text-sm text-muted">{exampleShown}</code>
+          <CopyButton text={exampleReal} label="URL" />
+        </div>
+        <p className="mt-2 text-sm text-muted">
+          Lebih suka header? Kirim <code className="font-mono text-fg">x-api-key: yn-…</code> sebagai gantinya.
+        </p>
+        <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+          <Link href="/docs" className="btn btn-primary">
+            Coba di dokumentasi
+            <ArrowIcon />
+          </Link>
+        </div>
+        <p className="mt-2 text-sm text-muted">Kolom API key di dokumentasi terisi otomatis selama kamu masuk.</p>
+      </section>
+
+      <p role="status" className={`text-sm font-medium ${message ? (message.ok ? "border border-ok p-3 text-ok" : "border border-danger p-3 text-danger") : "sr-only"}`}>
+        {message?.text}
+      </p>
+
+      <section aria-labelledby="key-ganti" className="border border-line bg-card p-4 sm:p-6">
+        <h2 id="key-ganti" className="font-mono text-lg font-bold">
           Ganti API key
         </h2>
         <p className="mt-1 text-sm text-muted">Lakukan ini kalau key kamu bocor. Key lama langsung dicabut dan tidak bisa dikembalikan; setiap bot atau aplikasi yang memakainya harus diisi key baru.</p>
@@ -466,8 +511,8 @@ export function AccountPanel({ fallback }: { fallback: string }) {
           <div className="mt-4 border border-danger p-4">
             <p className="font-medium">Ganti API key sekarang? Key lama berhenti berfungsi.</p>
             <div className="mt-3 flex flex-col gap-3 sm:flex-row">
-              <button ref={confirmRef} type="button" onClick={() => void rotate()} disabled={busy !== null} className="btn btn-danger">
-                {busy === "rotate" ? "Mengganti…" : "Ya, ganti API key"}
+              <button ref={confirmRef} type="button" onClick={() => void rotate()} disabled={busy} className="btn btn-danger">
+                {busy ? "Mengganti…" : "Ya, ganti API key"}
               </button>
               <button
                 type="button"
@@ -475,7 +520,7 @@ export function AccountPanel({ fallback }: { fallback: string }) {
                   setConfirming(false);
                   setTimeout(() => rotateRef.current?.focus(), 0);
                 }}
-                disabled={busy !== null}
+                disabled={busy}
                 className="btn btn-secondary"
               >
                 Batal
@@ -483,12 +528,21 @@ export function AccountPanel({ fallback }: { fallback: string }) {
             </div>
           </div>
         ) : (
-          <button ref={rotateRef} type="button" onClick={() => setConfirming(true)} disabled={busy !== null} className="btn btn-danger mt-4 w-full sm:w-auto">
+          <button ref={rotateRef} type="button" onClick={() => setConfirming(true)} disabled={busy} className="btn btn-danger mt-4 w-full sm:w-auto">
             <RefreshIcon />
             Ganti API key
           </button>
         )}
       </section>
     </div>
+  );
+}
+
+/** Halaman /dashboard/api-key. */
+export function ApiKeyPanel({ authEnabled, fallback }: { authEnabled: boolean; fallback: string }) {
+  return (
+    <MemberGate authEnabled={authEnabled} title="API key" path="/dashboard/api-key" guest="Kamu belum login, login dahulu untuk melihat API key kamu.">
+      {(user, apiKey) => <ApiKey user={user} apiKey={apiKey} fallback={fallback} />}
+    </MemberGate>
   );
 }

@@ -324,3 +324,104 @@ export function ChartIcon({ className }: P) {
     </svg>
   );
 }
+
+/* ---------- Ikon menu area anggota ---------- */
+
+export function HomeIcon({ className }: P) {
+  return (
+    <svg {...base} width={18} height={18} className={className}>
+      <path d="M3 11l9-7 9 7M5 10v10h14V10M10 20v-6h4v6" />
+    </svg>
+  );
+}
+
+export function ClockIcon({ className }: P) {
+  return (
+    <svg {...base} width={18} height={18} className={className}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </svg>
+  );
+}
+
+export function BoxIcon({ className }: P) {
+  return (
+    <svg {...base} width={18} height={18} className={className}>
+      <path d="M3 8l9-5 9 5v8l-9 5-9-5V8zM3 8l9 5 9-5M12 13v8" />
+    </svg>
+  );
+}
+
+export function GiftIcon({ className }: P) {
+  return (
+    <svg {...base} width={18} height={18} className={className}>
+      <path d="M4 12v9h16v-9M2 7h20v5H2zM12 7v14M12 7S10 2 7.5 3.5 9 7 12 7zM12 7s2-5 4.5-3.5S15 7 12 7z" />
+    </svg>
+  );
+}
+
+export function BookIcon({ className }: P) {
+  return (
+    <svg {...base} width={18} height={18} className={className}>
+      <path d="M4 4h6a2 2 0 0 1 2 2v14a2 2 0 0 0-2-2H4V4zM20 4h-6a2 2 0 0 0-2 2v14a2 2 0 0 1 2-2h6V4z" />
+    </svg>
+  );
+}
+
+export function UsersIcon({ className }: P) {
+  return (
+    <svg {...base} width={18} height={18} className={className}>
+      <circle cx="9" cy="8" r="3.5" />
+      <path d="M2 20a7 7 0 0 1 14 0M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.4A7 7 0 0 1 22 20" />
+    </svg>
+  );
+}
+
+export function ReceiptIcon({ className }: P) {
+  return (
+    <svg {...base} width={18} height={18} className={className}>
+      <path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3zM9 8h6M9 12h6" />
+    </svg>
+  );
+}
+
+export function TicketIcon({ className }: P) {
+  return (
+    <svg {...base} width={18} height={18} className={className}>
+      <path d="M3 7h18v3a2 2 0 0 0 0 4v3H3v-3a2 2 0 0 0 0-4V7zM14 7v10" />
+    </svg>
+  );
+}
+
+export function ShieldIcon({ className }: P) {
+  return (
+    <svg {...base} width={18} height={18} className={className}>
+      <path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6l8-3z" />
+    </svg>
+  );
+}
+
+export function LockIcon({ className }: P) {
+  return (
+    <svg {...base} width={18} height={18} className={className}>
+      <path d="M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4" />
+    </svg>
+  );
+}
+
+export function BanIcon({ className }: P) {
+  return (
+    <svg {...base} width={18} height={18} className={className}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M5.6 5.6l12.8 12.8" />
+    </svg>
+  );
+}
+
+export function CardIcon({ className }: P) {
+  return (
+    <svg {...base} width={18} height={18} className={className}>
+      <path d="M2 5h20v14H2zM2 10h20M6 15h4" />
+    </svg>
+  );
+}

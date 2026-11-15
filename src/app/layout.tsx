@@ -1,10 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import localFont from "next/font/local";
-import { SiteHeader } from "@/components/site-header";
 import { AUTH_ENABLED, KEY_REQUIRED } from "@/lib/auth/config";
-import { SiteFooter } from "@/components/site-footer";
-import { endpoints } from "@/lib/api/registry";
 import { SITE_DESCRIPTION, SITE_NAME, SITE_TAGLINE, SITE_URL } from "@/lib/site";
 import "./globals.css";
 
@@ -103,11 +100,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <a href="#konten" className="btn btn-primary fixed left-4 top-2 z-[100] -translate-y-24 focus:translate-y-0">
           Lewati ke konten
         </a>
-        <SiteHeader authEnabled={AUTH_ENABLED} />
-        <main id="konten" tabIndex={-1} className="flex-1 pt-[var(--header-h)] outline-none">
-          {children}
-        </main>
-        <SiteFooter total={endpoints.length} />
+        {/* Kerangka halaman (header, menu, footer) ada di layout tiap bagian:
+            (site) untuk beranda dan dokumentasi, (auth) untuk masuk dan daftar, (panel) untuk area anggota. */}
+        {children}
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       </body>
     </html>

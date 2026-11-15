@@ -24,7 +24,7 @@ const PAID_PLANS = PLANS.filter((p) => p.price > 0);
 
 const steps = [
   KEY_REQUIRED
-    ? { t: "Daftar dan ambil API key", d: "Daftar dengan Google atau email dan pilih username. API key gratis langsung dibuat dan tampil di halaman Akun." }
+    ? { t: "Daftar dan ambil API key", d: "Daftar dengan Google atau email dan pilih username. API key gratis langsung dibuat dan tampil di halaman API key." }
     : { t: "Pilih endpoint", d: "Cari fitur yang kamu butuhkan di dokumentasi, lalu lihat parameter yang diperlukan." },
   KEY_REQUIRED
     ? { t: "Pilih endpoint, kirim GET", d: "Cari fitur di dokumentasi, lalu kirim GET ke base URL ditambah path, parameternya, dan apikey milikmu. Tidak perlu header khusus." }

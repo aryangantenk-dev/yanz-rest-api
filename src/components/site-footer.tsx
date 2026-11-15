@@ -42,6 +42,7 @@ export function SiteFooter({ total }: { total: number }) {
           <ul className="mt-3 text-sm">
             <li><Link href="/docs" className={linkClass}>Dokumentasi lengkap</Link></li>
             <li><Link href="/dashboard" className={linkClass}>Dashboard</Link></li>
+            <li><Link href="/dashboard/api-key" className={linkClass}>API key</Link></li>
             <li><Link href="/paket" className={linkClass}>Paket</Link></li>
             <li>
               {/* /api adalah route handler yang mengembalikan JSON, bukan halaman, jadi dibuka dengan navigasi biasa. */}

@@ -10,9 +10,5 @@ export const metadata: Metadata = {
 };
 
 export default function DashboardPage() {
-  return (
-    <div className="mx-auto w-full max-w-5xl px-4 pb-16 pt-10 sm:px-6 sm:pt-16">
-      <DashboardPanel authEnabled={AUTH_ENABLED} />
-    </div>
-  );
+  return <DashboardPanel authEnabled={AUTH_ENABLED} />;
 }

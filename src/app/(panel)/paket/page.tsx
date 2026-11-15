@@ -24,10 +24,10 @@ const notes = [
 
 export default function PaketPage() {
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 pb-16 pt-10 sm:px-6 sm:pt-16">
+    <div>
       <header className="mb-8">
-        <h1 className="font-mono text-[2rem] font-bold leading-tight tracking-tight sm:text-[2.5rem]">Paket</h1>
-        <p className="mt-3 max-w-[60ch] text-lg text-muted">
+        <h1 className="font-mono text-[2rem] font-bold leading-tight tracking-tight">Paket</h1>
+        <p className="mt-2 max-w-[65ch] text-muted">
           Semua endpoint bisa dipakai di paket mana pun. Ada dua cara menambah jatah permintaan: paket harian, atau limit tambahan yang dibeli sesuai kebutuhan.
         </p>
       </header>

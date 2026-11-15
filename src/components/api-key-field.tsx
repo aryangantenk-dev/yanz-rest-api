@@ -24,7 +24,7 @@ export function ApiKeyField() {
   const help = signedIn
     ? `Terisi otomatis dari akun ${auth.user?.username ? `@${auth.user.username}` : auth.user?.email}. Dipakai untuk semua permintaan dan contoh kode di halaman ini.`
     : auth.user && auth.needsUsername
-      ? "Akunmu belum punya username. Buka Kelola akun untuk mengisinya; setelah itu API key kamu tampil di sini."
+      ? "Akunmu belum punya username. Buka Kelola API key untuk mengisinya; setelah itu API key kamu tampil di sini."
       : guestHelp;
 
   return (
@@ -59,8 +59,8 @@ export function ApiKeyField() {
         <Link href={`/login?next=${encodeURIComponent(pathname)}`} className="only-guest btn btn-primary shrink-0">
           Masuk
         </Link>
-        <Link href="/akun" className="only-signed btn btn-secondary shrink-0">
-          Kelola akun
+        <Link href="/dashboard/api-key" className="only-signed btn btn-secondary shrink-0">
+          Kelola API key
         </Link>
       </div>
       {/* Galat dan teks bantuan berbagi tempat yang sama agar isi halaman di bawahnya tidak bergeser. */}
@@ -74,7 +74,7 @@ export function ApiKeyField() {
         </p>
         {invalid && (
           <p id="docs-apikey-error" role="alert" className="col-start-1 row-start-1 font-medium text-danger">
-            Bentuk API key tidak dikenali. API key selalu diawali yn- dan tidak mengandung spasi. Salin lagi dari halaman Akun.
+            Bentuk API key tidak dikenali. API key selalu diawali yn- dan tidak mengandung spasi. Salin lagi dari halaman API key.
           </p>
         )}
       </div>

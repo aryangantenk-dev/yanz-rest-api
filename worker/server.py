@@ -739,6 +739,9 @@ async def tts(request: web.Request, work: Path) -> web.Response:
         raise Fail(400, "Parameter 'text' wajib diisi.")
     if len(text) > 600:
         raise Fail(400, "Teks terlalu panjang (maks 600 karakter).")
+    # sherpa-onnx menahan kalimat terakhir sampai ada tanda baca penutup; tanpa itu audio bisa kosong.
+    if not re.search(r"[.!?…:;\"')]$", text):
+        text += "."
     speed = qfloat(request, "speed", 1.0, 0.5, 2.0)
     fmt = qpick(request, "format", ["mp3", "ogg", "wav"], "mp3")
     voice = find_voice()

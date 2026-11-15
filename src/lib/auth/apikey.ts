@@ -34,6 +34,8 @@ type Entry = {
   /** Permintaan yang sudah dipakai pada hari `day` (nomor hari menurut WIB). */
   used: number;
   day: number;
+  /** Saldo limit tambahan; dipakai setelah kuota harian habis. */
+  extra: number;
 };
 
 const WIB_MS = 7 * 3_600_000;
@@ -73,6 +75,7 @@ export async function verifyKey(key: string): Promise<KeyVerdict> {
   let planExp = 0;
   let used = 0;
   let admin = false;
+  let extra = 0;
   try {
     const owner = await keyOwner(key);
     verdict = !owner ? "invalid" : owner.banned ? "banned" : "ok";
@@ -81,6 +84,7 @@ export async function verifyKey(key: string): Promise<KeyVerdict> {
     planExp = owner?.plan_expires_at ? Date.parse(owner.plan_expires_at) || 0 : 0;
     used = Math.max(0, Math.floor(Number(owner?.used_today) || 0));
     admin = owner?.is_admin === true;
+    extra = Math.max(0, Math.floor(Number(owner?.extra_limit) || 0));
     blocked = owner?.api_blocked === true;
     blockedUntil = owner?.api_blocked_until ? Date.parse(owner.api_blocked_until) || 0 : 0;
     blockReason = owner?.api_block_reason || "";
@@ -92,7 +96,7 @@ export async function verifyKey(key: string): Promise<KeyVerdict> {
     for (const [k, v] of cache) if (v.exp <= now) cache.delete(k);
     if (cache.size >= MAX_ENTRIES) cache.clear();
   }
-  const entry: Entry = { verdict, id, exp: now + (verdict === "ok" ? VALID_TTL_MS : INVALID_TTL_MS), plan, planExp, admin, blocked, blockedUntil, blockReason, used, day: wibDay(now) };
+  const entry: Entry = { verdict, id, exp: now + (verdict === "ok" ? VALID_TTL_MS : INVALID_TTL_MS), plan, planExp, admin, blocked, blockedUntil, blockReason, used, day: wibDay(now), extra };
   cache.set(key, entry);
   return verdictOf(entry, now);
 }
@@ -127,7 +131,18 @@ export function keyPaid(key: string): { id: string; limit: number; name: string 
   return plan.price > 0 ? { id: hit.id, limit: plan.perMinute, name: plan.name } : null;
 }
 
-export type KeyQuota = { plan: Plan; used: number; left: number; /** Detik sampai kuota terisi lagi (00.00 WIB). */ resetIn: number; /** Akun admin: kuota harian tidak berlaku. */ unlimited: boolean };
+export type KeyQuota = {
+  plan: Plan;
+  used: number;
+  left: number;
+  /** Saldo limit tambahan yang masih ada. */
+  extra: number;
+  /** Detik sampai kuota terisi lagi (00.00 WIB). */
+  resetIn: number;
+  /** Kuota harian tidak berlaku: akun admin, atau paket tanpa batas. */
+  unlimited: boolean;
+  admin: boolean;
+};
 
 /** Kuota harian sebuah key yang baru saja lolos `verifyKey`. */
 export function keyQuota(key: string): KeyQuota {
@@ -135,13 +150,25 @@ export function keyQuota(key: string): KeyQuota {
   const hit = cache.get(key);
   const plan = cachedPlan(key, now);
   const used = hit && hit.day === wibDay(now) ? hit.used : 0;
-  return { plan, used, left: Math.max(0, plan.daily - used), unlimited: !!hit && hit.verdict === "ok" && hit.admin, resetIn: Math.max(1, Math.ceil(((wibDay(now) + 1) * DAY_MS - WIB_MS - now) / 1000)) };
+  const admin = !!hit && hit.verdict === "ok" && hit.admin;
+  return { plan, used, left: Math.max(0, plan.daily - used), extra: hit && hit.verdict === "ok" ? hit.extra : 0, unlimited: admin || plan.unlimited === true, admin, resetIn: Math.max(1, Math.ceil(((wibDay(now) + 1) * DAY_MS - WIB_MS - now) / 1000)) };
 }
 
-/** Hitung satu permintaan ke kuota harian key ini (angka di database menyusul lewat recordUsage). */
-export function keyUse(key: string) {
+/**
+ * Hitung satu permintaan untuk key ini (angka di database menyusul lewat recordUsage).
+ * `fromExtra`: kuota harian sudah habis, jadi permintaan ini memotong saldo limit tambahan.
+ */
+export function keyUse(key: string, fromExtra = false) {
   const hit = cache.get(key);
-  if (hit && hit.verdict === "ok") hit.used++;
+  if (!hit || hit.verdict !== "ok") return;
+  hit.used++;
+  if (fromExtra && hit.extra > 0) hit.extra--;
+}
+
+/** Kembalikan satu limit tambahan yang baru dipotong `keyUse` (permintaannya gagal karena kesalahan server). */
+export function keyRefundExtra(key: string) {
+  const hit = cache.get(key);
+  if (hit && hit.verdict === "ok") hit.extra++;
 }
 
 /** Id akun pemilik sebuah key yang baru saja lolos `verifyKey` (dibaca dari cache), untuk statistik pemakaian. */

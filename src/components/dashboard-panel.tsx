@@ -28,7 +28,7 @@ type Usage = {
 };
 
 /** Paket yang sedang berlaku untuk akun ini (dari /api/auth/usage). */
-type PlanInfo = { id: string; name: string; daily: number; perMinute: number; paid: boolean; expires_at: string | null; /** Akun admin: tanpa kuota harian. */ unlimited?: boolean };
+type PlanInfo = { id: string; name: string; daily: number; perMinute: number; paid: boolean; expires_at: string | null; /** Tanpa kuota harian: akun admin (id "admin") atau paket tanpa batas. */ unlimited?: boolean; /** Saldo limit tambahan. */ extra?: number };
 
 const LOGIN_HREF = "/login?next=/dashboard";
 /** Jeda pembaruan otomatis. Saat gagal, jedanya digandakan sampai paling lama POLL_MAX_MS. */
@@ -495,7 +495,28 @@ function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
             ))}
           </dl>
 
-          {plan?.unlimited && (
+          {plan?.unlimited && plan.id !== "admin" && (
+            <section aria-labelledby="dash-paket" className="border border-line bg-card p-4 sm:p-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <h2 id="dash-paket" className="font-mono text-lg font-bold">
+                    Paket {plan.name}
+                  </h2>
+                  <p className="tnum mt-1 text-sm text-muted">
+                    {plan.expires_at ? `Aktif sampai ${new Date(plan.expires_at).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}. ` : ""}
+                    Tanpa kuota harian. <strong className="font-mono font-semibold text-fg">{fmt(usage.today)}</strong> permintaan hari ini.
+                  </p>
+                  {(plan.extra ?? 0) > 0 && <p className="tnum mt-1 text-sm text-muted">Limit tambahan {fmt(plan.extra ?? 0)} permintaan tersimpan, dan tidak terpakai selama paket ini aktif.</p>}
+                </div>
+                <Link href="/paket" className="btn btn-secondary shrink-0">
+                  Perpanjang paket
+                  <ArrowIcon />
+                </Link>
+              </div>
+            </section>
+          )}
+
+          {plan?.unlimited && plan.id === "admin" && (
             <section aria-labelledby="dash-paket" className="border border-line bg-card p-4 sm:p-6">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
@@ -527,17 +548,21 @@ function Stats({ user, apiKey }: { user: AuthUser; apiKey: string }) {
                   </p>
                 </div>
                 <Link href="/paket" className="btn btn-secondary shrink-0">
-                  {plan.paid ? "Perpanjang paket" : "Lihat paket"}
+                  {plan.paid ? "Paket dan limit" : "Lihat paket"}
                   <ArrowIcon />
                 </Link>
               </div>
               <p className="tnum mt-4 text-sm">
                 <strong className="font-mono text-base font-semibold">{fmt(usage.today)}</strong> dari {fmt(plan.daily)} permintaan terpakai hari ini
-                {usage.today >= plan.daily ? ". Kuota hari ini habis." : `, sisa ${fmt(plan.daily - usage.today)}.`}
+                {usage.today >= plan.daily ? ((plan.extra ?? 0) > 0 ? ". Kuota hari ini habis; permintaan berikutnya memotong limit tambahan." : ". Kuota hari ini habis.") : `, sisa ${fmt(plan.daily - usage.today)}.`}
               </p>
               <div className="mt-2 h-2 bg-subtle" role="progressbar" aria-label="Kuota harian terpakai" aria-valuemin={0} aria-valuemax={plan.daily} aria-valuenow={Math.min(usage.today, plan.daily)}>
                 <span className={`block h-full ${usage.today >= plan.daily ? "bg-danger" : "bg-accent"}`} style={{ width: `${Math.min(100, (usage.today / Math.max(1, plan.daily)) * 100)}%` }} />
               </div>
+              <p className="tnum mt-3 text-sm">
+                Limit tambahan: <strong className="font-mono font-semibold">{fmt(plan.extra ?? 0)}</strong> permintaan
+                <span className="text-muted">{(plan.extra ?? 0) > 0 ? ". Dipakai setelah kuota harian habis, dan tidak hangus." : ". Beli di halaman Paket bila kuota harian kurang."}</span>
+              </p>
             </section>
           )}
 

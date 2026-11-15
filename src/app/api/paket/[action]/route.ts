@@ -6,7 +6,7 @@ import { clearSessionCookie, isSecure, sessionUserId } from "@/lib/auth/session"
 import { keyOwner, userById, type User } from "@/lib/auth/users";
 import { ORDER_ID_RE, newOrderId, orderAttach, orderClose, orderGet, orderOpen, orderPaid, orderSync, ordersOf, publicOrder, type Order } from "@/lib/billing/orders";
 import { FEE_ON_CUSTOMER, GATEWAY_READY, GatewayError, MAX_AMOUNT, MIN_AMOUNT, WEBHOOK_READY, createPayment, verifyWebhook } from "@/lib/billing/welper";
-import { PLAN_DAYS, PLAN_MONTHS, planById, planView } from "@/lib/plans";
+import { LIMIT_MAX, LIMIT_MIN, LIMIT_PLAN, LIMIT_PRICE, LIMIT_STEP, MAX_PLAN_DAYS, formatNumber, planById, planView } from "@/lib/plans";
 import { SITE_CREATOR, SITE_NAME } from "@/lib/site";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +16,8 @@ export const runtime = "nodejs";
  * Rute paket untuk halaman /paket (bukan bagian dari API publik).
  *   GET  /api/paket/me                 paket akun yang sedang masuk, pemakaian hari ini, riwayat pesanan
  *   GET  /api/paket/status?order=ID    status satu pesanan (ikut dicocokkan dengan payment gateway)
- *   POST /api/paket/checkout           { plan, months }  buat tagihan QRIS, jawabannya memuat payment_url
+ *   POST /api/paket/checkout           { plan, days } untuk paket, atau { plan: "limit", qty } untuk limit tambahan;
+ *                                      membuat tagihan QRIS, jawabannya memuat payment_url
  *   POST /api/paket/webhook            notifikasi dari payment gateway (bertanda tangan)
  */
 function json(status: number, body: Record<string, unknown>, setCookie?: string) {
@@ -29,7 +30,7 @@ const fail = (status: number, error: string, extra: Record<string, unknown> = {}
 
 const STORE_DOWN = "Server akun sedang tidak dapat dihubungi. Coba lagi sebentar lagi.";
 
-const planInfo = (user: User) => planView(user.plan, user.plan_expires_at, user.is_admin === true);
+const planInfo = (user: User) => planView(user.plan, user.plan_expires_at, user.is_admin === true, user.extra_limit);
 
 /** Akun yang sedang masuk, atau jawaban galat yang tinggal dikembalikan. */
 async function signedIn(req: Request, what: string): Promise<User | NextResponse> {
@@ -114,18 +115,35 @@ export async function POST(req: Request, ctx: { params: Promise<{ action: string
     if (!user.username) return fail(403, "Isi username dulu di halaman Akun sebelum membeli paket.");
 
     const { body } = await readJson(req, 2000);
-    const plan = planById(typeof body.plan === "string" ? body.plan : "");
-    const months = Number(body.months);
-    if (!plan || plan.price <= 0) return fail(400, "Paket tidak dikenal.", { field: "plan" });
-    if (!PLAN_MONTHS.includes(months)) return fail(400, `Lama berlangganan harus salah satu dari: ${PLAN_MONTHS.join(", ")} bulan.`, { field: "months" });
-    const amount = plan.price * months;
-    if (amount < MIN_AMOUNT || amount > MAX_AMOUNT) return fail(400, "Nominal ini tidak bisa dibayar lewat QRIS. Pilih lama berlangganan lain.", { field: "months" });
+    const planId = typeof body.plan === "string" ? body.plan : "";
+    // Dua macam pembelian: limit tambahan (qty limit) atau paket harian (days hari).
+    const topUp = planId === LIMIT_PLAN;
+    const plan = topUp ? null : planById(planId);
+    let days = 0;
+    let qty = 0;
+    let amount = 0;
+    let what = "";
+    if (topUp) {
+      qty = Number(body.qty);
+      if (!Number.isInteger(qty) || qty < LIMIT_MIN || qty > LIMIT_MAX || qty % LIMIT_STEP !== 0) {
+        return fail(400, `Jumlah limit harus kelipatan ${formatNumber(LIMIT_STEP)}, dari ${formatNumber(LIMIT_MIN)} sampai ${formatNumber(LIMIT_MAX)}.`, { field: "qty" });
+      }
+      amount = qty * LIMIT_PRICE;
+      what = `limit tambahan ${formatNumber(qty)} permintaan`;
+    } else {
+      if (!plan || plan.price <= 0) return fail(400, "Paket tidak dikenal.", { field: "plan" });
+      days = Number(body.days);
+      if (!Number.isInteger(days) || days < 1 || days > MAX_PLAN_DAYS) return fail(400, `Jumlah hari harus bilangan bulat dari 1 sampai ${MAX_PLAN_DAYS}.`, { field: "days" });
+      amount = plan.price * days;
+      what = `paket ${plan.name} ${days} hari`;
+    }
+    if (amount < MIN_AMOUNT || amount > MAX_AMOUNT) return fail(400, `Nominal ini tidak bisa dibayar lewat QRIS. ${topUp ? "Ubah jumlah limitnya." : "Ubah jumlah harinya."}`, { field: topUp ? "qty" : "days" });
     if (!GATEWAY_READY) return fail(503, "Pembayaran belum diaktifkan di server ini. Hubungi owner untuk membeli paket.");
 
     const wait = hit("checkout", user.id, 8, 10 * 60_000);
     if (wait) return fail(429, `Terlalu banyak tagihan dibuat. Coba lagi dalam ${Math.ceil(wait / 60)} menit.`, { retry_after: wait });
 
-    const opened = await orderOpen(newOrderId(), user.id, plan.id, months, months * PLAN_DAYS, amount);
+    const opened = await orderOpen(newOrderId(), user.id, topUp ? LIMIT_PLAN : plan!.id, days, qty, amount);
     if (opened.status !== "ok") return fail(429, "Terlalu banyak tagihan dibuat dalam satu jam terakhir. Selesaikan tagihan yang ada atau coba lagi nanti.");
     let order: Order = opened.order;
     if (order.payment_url) return json(200, { order: publicOrder(order), payment_url: order.payment_url, reused: true });
@@ -136,7 +154,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ action: string
         amount,
         merchantRef: order.id,
         customerName: user.username,
-        description: `${SITE_NAME} paket ${plan.name} ${months} bulan`,
+        description: `${SITE_NAME} ${what}`,
         // Halaman bayar menambahkan ?ref=…&merchant_ref=…&status=… ke alamat ini.
         returnUrl: `${authOrigin(req)}/paket`,
       });

@@ -97,25 +97,33 @@ Semua endpoint `/api/admin/…` lain menerima `ADMIN_KEY` **atau** sesi login ak
 
 Data akun ada di tabel `api_users`; kode verifikasi di `auth_otps` (yang disimpan hanya hash-nya). Sesi login adalah cookie bertanda tangan yang berlaku 30 hari.
 
-## Paket dan kuota harian
+## Paket, kuota harian, dan limit tambahan
 
 Berlaku saat API key diwajibkan. Daftar paket ada di `src/lib/plans.ts` dan itulah satu-satunya tempat untuk mengubah nama, harga, dan kuota.
 
+Ada dua cara menambah jatah permintaan, dan keduanya bisa dipakai bersamaan.
+
+**Pilihan 1: paket harian.** Harganya per hari; pembeli memilih sendiri jumlah harinya (1 sampai 365), dan totalnya harga per hari dikali jumlah hari.
+
 | Paket | Harga | Kuota per hari | Batas per menit |
 | --- | --- | --- | --- |
-| Gratis | Rp0 | 1.000 permintaan per akun | 45 per IP |
-| Pro | Rp15.000 per 30 hari | 50.000 permintaan per akun | 300 per akun |
+| Gratis | Rp0 | 50 permintaan per akun | 45 per IP |
+| Pro | Rp1.000 per hari | 1.000 permintaan per akun | 300 per akun |
+| Enterprise | Rp2.500 per hari | 7.000 permintaan per akun | 300 per akun |
+| Bisnis | Rp5.000 per hari | tanpa batas | 600 per akun |
 
-- Kuota dihitung per akun dan terisi lagi pukul 00.00 WIB. Setiap jawaban membawa header `x-plan`, `x-quota-limit`, `x-quota-remaining`, dan `x-quota-reset` (detik). Saat kuota habis API menjawab HTTP `429` berisi `quota`, `used`, `retry_after`, dan tautan `upgrade`.
+**Pilihan 2: limit tambahan.** Saldo permintaan yang dibeli terpisah dari paket: Rp100 untuk 100 limit (Rp1 per limit), kelipatan 100, paling sedikit 1.000 limit karena payment gateway tidak menerima pembayaran di bawah Rp1.000. Satu limit dipotong untuk setiap permintaan setelah kuota harian paket habis. Saldonya tidak hangus dan tidak terisi ulang sendiri. Permintaan yang berakhir dengan kesalahan server (status 500 ke atas) tidak memotong limit. Paket Bisnis dan akun admin tidak memakai limit tambahan.
+
+- Kuota dihitung per akun dan terisi lagi pukul 00.00 WIB. Setiap jawaban membawa header `x-plan`, `x-quota-limit`, `x-quota-remaining`, `x-quota-reset` (detik), dan `x-limit-extra` (sisa limit tambahan). Saat kuota harian dan limit tambahan sama-sama habis API menjawab HTTP `429` berisi `quota`, `used`, `extra`, `retry_after`, dan tautan `upgrade`.
 - Angka pemakaian dibaca dari database paling lama tiap satu menit dan di antaranya dihitung di memori tiap instance, jadi kuota bisa terlewati sedikit saat lalu lintas tersebar ke banyak instance.
 - Akun paket berbayar dihitung per akun untuk batas per menit, terpisah dari hitungan IP, dan tidak pernah memicu blokir IP.
-- Membeli paket yang sama selagi masih aktif menambah masa aktifnya. Setelah masa aktif habis akun kembali ke paket Gratis dengan sendirinya; tidak ada perpanjangan otomatis.
+- Membeli paket yang sama selagi masih aktif menambah masa aktifnya. Membeli paket lain menggantinya mulai saat itu, dan sisa hari paket lama hangus. Setelah masa aktif habis akun kembali ke paket Gratis dengan sendirinya; tidak ada perpanjangan otomatis.
 
 Pembayaran memakai payment gateway QRIS [Welper](https://welper.web.id/gateway/docs):
 
 1. Buat API key di halaman Developer Welper, lalu isi `WELPER_API_KEY` dan `WELPER_WEBHOOK_SECRET` di environment variable server.
 2. Isi URL webhook di halaman Developer dengan `<domain>/api/paket/webhook`.
-3. Pembeli memilih paket di `/paket`, diarahkan ke halaman bayar Welper, lalu kembali ke `/paket`. Paket aktif begitu webhook `payment.paid` diterima; halaman `/paket` juga memeriksa status tagihan langsung ke gateway sebagai cadangan bila webhook terlambat.
+3. Pembeli memilih paket atau jumlah limit di `/paket`, diarahkan ke halaman bayar Welper, lalu kembali ke `/paket`. Paket atau limit aktif begitu webhook `payment.paid` diterima; halaman `/paket` juga memeriksa status tagihan langsung ke gateway sebagai cadangan bila webhook terlambat.
 
 Pesanan disimpan di tabel `api_orders`. Untuk owner (butuh `ADMIN_KEY`):
 
@@ -124,6 +132,7 @@ Pesanan disimpan di tabel `api_orders`. Untuk owner (butuh `ADMIN_KEY`):
 /api/admin/orders?key=ADMIN_KEY                             100 pesanan terbaru dan total yang lunas
 /api/admin/setplan?email=a@b.com&plan=pro&days=30&key=…     beri paket tanpa pembayaran (menambah masa aktif)
 /api/admin/setplan?email=a@b.com&plan=free&key=…            kembalikan akun ke paket Gratis
+/api/admin/addlimit?email=a@b.com&amount=1000&key=…         tambah limit tambahan tanpa pembayaran (angka negatif mengurangi)
 ```
 
 ## Batas pemakaian dan blokir IP

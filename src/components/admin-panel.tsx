@@ -21,6 +21,8 @@ type UserRow = {
   plan_expires_at?: string | null;
   used_today?: number;
   used_total?: number;
+  /** Saldo limit tambahan akun ini. */
+  extra_limit?: number;
   /** Blokir API yang sedang berlaku; `api_blocked_until` null berarti selamanya. */
   api_blocked?: boolean;
   api_blocked_until?: string | null;
@@ -37,7 +39,7 @@ type UserUsageData = {
 type KeyBlockRow = { email: string; username: string; api_blocked_until: string | null; api_block_reason: string; api_blocked_at: string | null };
 type KeyBlocks = { total: number; users: KeyBlockRow[] };
 type Users = { total: number; users: UserRow[] };
-type OrderRow = { id: string; email: string; username: string; plan: string; months: number; amount: number; total: number | null; status: string; gateway_ref: string; created_at: string; paid_at: string | null };
+type OrderRow = { id: string; email: string; username: string; plan: string; days?: number; qty?: number; amount: number; total: number | null; status: string; gateway_ref: string; created_at: string; paid_at: string | null };
 type Orders = { paid: number; paid_amount: number; orders: OrderRow[] };
 type Ban = { ip: string; reason: string; created_at: string | null };
 type Bans = { total: number; bans: Ban[] };
@@ -46,7 +48,7 @@ type EndpointOption = { id: string; title: string; category: string };
 type CategoryOption = { id: string; name: string };
 type ApiBlockRow = { path: string; reason: string; created_at: string | null; scope?: "endpoint" | "category"; title?: string; exists?: boolean };
 type ApiBlocks = { total: number; blocks: ApiBlockRow[] };
-type Payment = { plan_days: number; api_key_set: boolean; webhook_secret_set: boolean; fee_bearer: string; gateway_reachable: boolean; webhook_url: string };
+type Payment = { plan_days: number; limit_price?: number; limit_step?: number; api_key_set: boolean; webhook_secret_set: boolean; fee_bearer: string; gateway_reachable: boolean; webhook_url: string };
 type Notice = { tone: "ok" | "danger"; text: string };
 type Tab = "akun" | "pesanan" | "blokir" | "kunci" | "api" | "pembayaran";
 
@@ -325,6 +327,7 @@ export function AdminPanel({
   const [viewing, setViewing] = useState<string | null>(null);
   const [planPick, setPlanPick] = useState(plans.find((p) => p.paid)?.id ?? plans[0]?.id ?? "free");
   const [daysPick, setDaysPick] = useState(String(planDays));
+  const [limitPick, setLimitPick] = useState("1000");
   const [banIp, setBanIp] = useState("");
   const [banReason, setBanReason] = useState("");
   const alive = useRef(true);
@@ -439,6 +442,8 @@ export function AdminPanel({
   const shown = users ? users.users.filter((u) => !needle || u.email.includes(needle) || u.username.toLowerCase().includes(needle) || u.name.toLowerCase().includes(needle)) : [];
   const pickedPlan = plans.find((p) => p.id === planPick);
   const daysOk = !pickedPlan?.paid || (/^\d{1,4}$/.test(daysPick) && Number(daysPick) >= 1 && Number(daysPick) <= 3650);
+  // Angka negatif mengurangi saldo limit tambahan.
+  const limitOk = /^-?\d{1,8}$/.test(limitPick) && Number(limitPick) !== 0 && Math.abs(Number(limitPick)) <= 10_000_000;
   const first = users === null && orders === null && bans === null && payment === null && apiBlocks === null && keyBlocks === null && Object.keys(errors).length === 0;
 
   // Tab Blokir API (pengguna): akun ditulis dengan email, atau username salah satu akun yang termuat.
@@ -573,6 +578,10 @@ export function AdminPanel({
                           </dd>
                         </div>
                         <div className="flex justify-between gap-3 sm:block">
+                          <dt className="text-muted sm:inline">Limit tambahan: </dt>
+                          <dd className="sm:inline">{fmt(u.extra_limit)}</dd>
+                        </div>
+                        <div className="flex justify-between gap-3 sm:block">
                           <dt className="text-muted sm:inline">Bergabung: </dt>
                           <dd className="sm:inline">
                             {moment(u.created_at)} lewat {u.provider === "google" ? "Google" : "email"}
@@ -687,6 +696,42 @@ export function AdminPanel({
                         </form>
                       )}
 
+                      {open && (
+                        <form
+                          className="mt-4 border-t border-line pt-4"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            if (!limitOk) return;
+                            const n = Number(limitPick);
+                            void run(`limit:${u.email}`, "addlimit", { email: u.email, amount: String(n) }, `Limit tambahan ${u.email} ${n > 0 ? "ditambah" : "dikurangi"} ${fmt(Math.abs(n))}.`);
+                          }}
+                        >
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                            <div>
+                              <label htmlFor={`${ids}-limit`} className="block text-sm font-medium">
+                                Tambah limit tambahan (permintaan)
+                              </label>
+                              <input
+                                id={`${ids}-limit`}
+                                inputMode="text"
+                                autoComplete="off"
+                                value={limitPick}
+                                onChange={(e) => setLimitPick(e.target.value.replace(/[^\d-]/g, "").replace(/(?!^)-/g, "").slice(0, 9))}
+                                aria-invalid={!limitOk}
+                                aria-describedby={`${ids}-limit-help`}
+                                className="field tnum mt-1"
+                              />
+                            </div>
+                            <button type="submit" disabled={!!busy || !limitOk} className="btn btn-primary">
+                              {busy === `limit:${u.email}` ? "Menyimpan…" : "Tambah limit"}
+                            </button>
+                          </div>
+                          <p id={`${ids}-limit-help`} className={`tnum mt-2 text-sm ${limitOk ? "text-muted" : "text-danger"}`}>
+                            {limitOk ? `Tanpa pembayaran. Saldo sekarang ${fmt(u.extra_limit)}. Isi angka negatif untuk mengurangi.` : "Isi bilangan bulat selain 0, paling banyak 10.000.000."}
+                          </p>
+                        </form>
+                      )}
+
                       {viewing === u.email && <UserUsage email={u.email} />}
                     </li>
                   );
@@ -723,7 +768,7 @@ export function AdminPanel({
                             <td className="py-2 pr-3 font-mono">{o.id}</td>
                             <td className="wrap-anywhere py-2 pr-3">{o.username ? `@${o.username}` : o.email || "(akun dihapus)"}</td>
                             <td className="py-2 pr-3">
-                              {planName(o.plan)}, {o.months} bulan
+                              {o.plan === "limit" ? `Limit tambahan ${fmt(o.qty)}` : `${planName(o.plan)}${o.days ? `, ${fmt(o.days)} hari` : ""}`}
                             </td>
                             <td className="py-2 pr-3 text-right font-mono">{rupiah(o.amount)}</td>
                             <td className="py-2">{o.status === "paid" && o.paid_at ? `Lunas ${moment(o.paid_at)}` : (STATUS_LABEL[o.status] ?? o.status)}</td>
@@ -1029,7 +1074,7 @@ export function AdminPanel({
                       ["Secret webhook", payment.webhook_secret_set ? "Terpasang" : "Belum diisi (WELPER_WEBHOOK_SECRET)", payment.webhook_secret_set],
                       ["Koneksi ke gateway", payment.gateway_reachable ? "Bisa dihubungi" : "Tidak bisa dihubungi", payment.gateway_reachable],
                       ["Biaya QRIS", payment.fee_bearer === "customer" ? "Ditanggung pembeli" : "Dipotong dari yang kamu terima", true],
-                      ["Satu masa aktif", `${fmt(payment.plan_days)} hari`, true],
+                      ["Harga limit tambahan", payment.limit_step && payment.limit_price ? `${rupiah(payment.limit_price * payment.limit_step)} per ${fmt(payment.limit_step)} limit` : "-", true],
                     ].map(([k, v, good]) => (
                       <div key={String(k)} className="flex flex-col gap-1 py-2 sm:flex-row sm:justify-between sm:gap-6">
                         <dt className="text-muted">{k}</dt>

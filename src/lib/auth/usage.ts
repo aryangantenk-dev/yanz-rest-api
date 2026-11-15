@@ -37,11 +37,12 @@ export const HISTORY_KEEP = 200;
  * Catat satu permintaan milik sebuah akun: naikkan hitungan hariannya dan tambahkan ke riwayat.
  * Dijalankan setelah respons terkirim supaya tidak memperlambat API; kegagalan mencatat tidak
  * pernah mengganggu permintaannya. Status 400 ke atas dihitung sebagai gagal.
+ * `extra`: permintaan ini memotong satu limit tambahan milik akunnya.
  */
-export function recordUsage(userId: string | null, path: string, status: number, ms: number) {
+export function recordUsage(userId: string | null, path: string, status: number, ms: number, extra = false) {
   if (!userId) return;
   const task = () =>
-    supabaseRpc("auth_usage_record", { p_id: userId, p_path: path, p_ok: status < 400, p_status: status, p_ms: Math.max(0, Math.round(ms)) }).catch(() => {
+    supabaseRpc("auth_usage_record", { p_id: userId, p_path: path, p_ok: status < 400, p_status: status, p_ms: Math.max(0, Math.round(ms)), p_extra: extra }).catch(() => {
       /* diabaikan */
     });
   try {

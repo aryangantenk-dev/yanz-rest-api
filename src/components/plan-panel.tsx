@@ -2,14 +2,16 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { formatNumber, rupiah, type Plan } from "@/lib/plans";
+import { LIMIT_PLAN, formatNumber, rupiah, type Plan } from "@/lib/plans";
 import { refreshAuth, useAuth } from "./auth-client";
 import { ArrowIcon, CheckIcon, RefreshIcon } from "./icons";
 
-type PlanInfo = { id: string; name: string; daily: number; perMinute: number; paid: boolean; expires_at: string | null; /** Akun admin: tanpa kuota harian. */ unlimited?: boolean };
-type Order = { id: string; plan: string; months: number; amount: number; total: number | null; status: string; payment_url: string; expires_at: string | null; created_at: string; paid_at: string | null };
+type PlanInfo = { id: string; name: string; daily: number; perMinute: number; paid: boolean; expires_at: string | null; /** Tanpa kuota harian: akun admin (id "admin") atau paket tanpa batas. */ unlimited?: boolean; /** Saldo limit tambahan. */ extra?: number };
+type Order = { id: string; plan: string; days: number; qty: number; amount: number; total: number | null; status: string; payment_url: string; expires_at: string | null; created_at: string; paid_at: string | null };
 type Me = { plan: PlanInfo; today: number; orders: Order[]; payment: boolean; needsUsername: boolean };
 type Notice = { tone: "ok" | "info" | "danger"; text: string };
+/** Aturan pembelian limit tambahan (dari src/lib/plans.ts). */
+export type LimitRules = { price: number; step: number; min: number; max: number; choices: readonly number[] };
 
 const OFFLINE = "Tidak dapat terhubung ke server. Periksa koneksimu, lalu coba lagi.";
 const ORDER_ID_RE = /^YZ-[0-9A-Z]{6,12}-[0-9A-F]{10}$/;
@@ -36,10 +38,50 @@ async function getJson<T>(url: string, init?: RequestInit): Promise<{ ok: boolea
 /** Tagihan yang masih bisa dibayar: menunggu, punya tautan bayar, dan belum lewat batas waktunya. */
 const payable = (o: Order) => o.status === "pending" && !!o.payment_url && (!o.expires_at || Date.parse(o.expires_at) > Date.now());
 
+type BuyState = { authEnabled: boolean; signedIn: boolean; needsUsername: boolean; canPay: boolean; busy: string | null; ownerUrl: string };
+
+/** Tombol beli beserta keadaan lain yang menggantikannya (belum masuk, belum punya username, pembayaran belum aktif). */
+function BuyArea({ state, id, label, disabled, what, onBuy }: { state: BuyState; /** Penanda tombol ini di `state.busy`. */ id: string; label: string; disabled: boolean; /** Nama barangnya di dalam kalimat, misalnya "paket ini". */ what: string; onBuy: () => void }) {
+  if (!state.authEnabled) return <p className="text-sm text-muted">Login belum diaktifkan di server ini, jadi {what} belum bisa dibeli.</p>;
+  if (!state.signedIn) {
+    return (
+      <Link href="/login?next=/paket" className="btn btn-primary w-full">
+        Masuk untuk membeli
+        <ArrowIcon />
+      </Link>
+    );
+  }
+  if (state.needsUsername) {
+    return (
+      <Link href="/akun?next=/paket" className="btn btn-primary w-full">
+        Pilih username dulu
+        <ArrowIcon />
+      </Link>
+    );
+  }
+  if (!state.canPay) {
+    return (
+      <>
+        <p className="text-sm text-muted">Pembayaran otomatis belum aktif. Untuk membeli {what}, hubungi owner.</p>
+        <a href={state.ownerUrl} target="_blank" rel="noreferrer" className="btn btn-secondary mt-3 w-full">
+          Hubungi owner lewat WhatsApp
+        </a>
+      </>
+    );
+  }
+  return (
+    <button type="button" onClick={onBuy} disabled={!!state.busy || disabled} className="btn btn-primary w-full">
+      {state.busy === id ? "Membuat tagihan…" : label}
+      {state.busy !== id && <ArrowIcon />}
+    </button>
+  );
+}
+
 export function PlanPanel({
   plans,
-  months,
-  planDays,
+  dayChoices,
+  maxDays,
+  limit,
   total,
   enabled,
   authEnabled,
@@ -48,8 +90,10 @@ export function PlanPanel({
   ownerUrl,
 }: {
   plans: readonly Plan[];
-  months: readonly number[];
-  planDays: number;
+  /** Pilihan cepat jumlah hari; pembeli juga bisa mengisi sendiri sampai `maxDays`. */
+  dayChoices: readonly number[];
+  maxDays: number;
+  limit: LimitRules;
   /** Jumlah endpoint, untuk daftar isi paket. */
   total: number;
   /** API key diwajibkan di server ini; tanpa itu kuota paket tidak berlaku. */
@@ -63,11 +107,16 @@ export function PlanPanel({
   const signedIn = !!auth.user;
   const [me, setMe] = useState<Me | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [pick, setPick] = useState(months[0] ?? 1);
+  const [dayText, setDayText] = useState(String(dayChoices.includes(7) ? 7 : (dayChoices[0] ?? 1)));
+  const [qtyText, setQtyText] = useState(String(limit.choices[0] ?? limit.min));
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const alive = useRef(true);
   const watching = useRef<string | null>(null);
+
+  const planName = (id: string) => plans.find((p) => p.id === id)?.name ?? id;
+  /** Isi sebuah pesanan dalam kata-kata: paket dan jumlah harinya, atau jumlah limit tambahan. */
+  const orderLabel = (o: Order) => (o.plan === LIMIT_PLAN ? `Limit tambahan ${formatNumber(o.qty)} permintaan` : `Paket ${planName(o.plan)}${o.days > 0 ? ` ${formatNumber(o.days)} hari` : ""}`);
 
   const load = useCallback(async () => {
     const r = await getJson<Me>("/api/paket/me");
@@ -99,8 +148,12 @@ export function PlanPanel({
         if (order?.status === "paid") {
           watching.current = null;
           const fresh = await load();
-          const until = (fresh?.plan ?? r.body.plan)?.expires_at;
-          setNotice({ tone: "ok", text: `Pembayaran diterima. Paket ${(fresh?.plan ?? r.body.plan)?.name ?? ""} aktif${until ? ` sampai ${dateLong(until)}` : ""}. API key kamu memakai kuota baru paling lama satu menit lagi.` });
+          const now = fresh?.plan ?? r.body.plan;
+          if (order.plan === LIMIT_PLAN) {
+            setNotice({ tone: "ok", text: `Pembayaran diterima. ${formatNumber(order.qty)} limit tambahan sudah masuk${now ? `; saldo limit tambahanmu sekarang ${formatNumber(now.extra ?? 0)}` : ""}. API key kamu bisa memakainya paling lama satu menit lagi.` });
+          } else {
+            setNotice({ tone: "ok", text: `Pembayaran diterima. Paket ${now?.name ?? ""} aktif${now?.expires_at ? ` sampai ${dateLong(now.expires_at)}` : ""}. API key kamu memakai kuota baru paling lama satu menit lagi.` });
+          }
           return;
         }
         if (order && order.status !== "pending") {
@@ -113,7 +166,7 @@ export function PlanPanel({
       }
       if (!alive.current || watching.current !== id) return;
       watching.current = null;
-      setNotice({ tone: "info", text: "Pembayaran belum terkonfirmasi. Kalau kamu sudah membayar, tunggu sebentar lalu tekan Cek status; paket aktif otomatis begitu pembayaran masuk." });
+      setNotice({ tone: "info", text: "Pembayaran belum terkonfirmasi. Kalau kamu sudah membayar, tunggu sebentar lalu tekan Cek status; pembelianmu aktif otomatis begitu pembayaran masuk." });
     },
     [load],
   );
@@ -138,14 +191,15 @@ export function PlanPanel({
     void load();
   }, [signedIn, load, watch]);
 
-  async function buy(plan: Plan) {
+  /** Buat tagihan lalu pindah ke halaman bayar. `id` menandai tombol mana yang sedang sibuk. */
+  async function buy(id: string, payload: { plan: string; days?: number; qty?: number }) {
     if (busy) return;
-    setBusy(plan.id);
+    setBusy(id);
     setNotice(null);
     const r = await getJson<{ payment_url?: string; order?: Order }>("/api/paket/checkout", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ plan: plan.id, months: pick }),
+      body: JSON.stringify(payload),
     });
     if (!alive.current) return;
     if (r.status === 401) void refreshAuth();
@@ -157,16 +211,25 @@ export function PlanPanel({
     setBusy(null);
     if (r.ok && r.body.order?.status === "paid") {
       void load();
-      setNotice({ tone: "ok", text: "Pesanan ini sudah lunas. Paketmu sudah aktif." });
+      setNotice({ tone: "ok", text: "Pesanan ini sudah lunas dan sudah aktif di akunmu." });
       return;
     }
     setNotice({ tone: "danger", text: r.body.error ?? "Tagihan gagal dibuat. Coba lagi." });
   }
 
   const current = signedIn ? me?.plan : undefined;
+  const isAdmin = current?.id === "admin";
+  const extra = current?.extra ?? 0;
   const open = me?.orders.find(payable);
   const usedPct = current ? Math.min(100, (me!.today / Math.max(1, current.daily)) * 100) : 0;
-  const days = pick * planDays;
+
+  const days = /^\d{1,3}$/.test(dayText) ? Number(dayText) : NaN;
+  const daysOk = Number.isInteger(days) && days >= 1 && days <= maxDays;
+  const qty = /^\d{1,9}$/.test(qtyText) ? Number(qtyText) : NaN;
+  const qtyOk = Number.isInteger(qty) && qty >= limit.min && qty <= limit.max && qty % limit.step === 0;
+  const feeNote = feeOnCustomer ? "Belum termasuk biaya QRIS dan kode unik beberapa ratus rupiah; nominal persisnya tampil di halaman bayar." : "Ditambah kode unik beberapa ratus rupiah; nominal persisnya tampil di halaman bayar.";
+
+  const buyState = { authEnabled, signedIn, needsUsername: !!(auth.needsUsername || me?.needsUsername), canPay: me ? me.payment : paymentReady, busy, ownerUrl };
 
   return (
     <div className="space-y-6">
@@ -187,18 +250,18 @@ export function PlanPanel({
         </div>
       )}
 
-      {current?.unlimited && me && (
+      {current && isAdmin && me && (
         <section aria-labelledby="paket-kamu" className="border border-line bg-card p-4 sm:p-6">
           <h2 id="paket-kamu" className="font-mono text-lg font-bold">
             Akun admin
           </h2>
           <p className="tnum mt-2 text-sm text-muted">
-            Akun ini tidak terkena kuota harian, jadi tidak perlu membeli paket. <strong className="font-mono font-semibold text-fg">{formatNumber(me.today)}</strong> permintaan hari ini.
+            Akun ini tidak terkena kuota harian. <strong className="font-mono font-semibold text-fg">{formatNumber(me.today)}</strong> permintaan hari ini.
           </p>
         </section>
       )}
 
-      {current && !current.unlimited && me && (
+      {current && !isAdmin && me && (
         <section aria-labelledby="paket-kamu" className="border border-line bg-card p-4 sm:p-6">
           <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
             <h2 id="paket-kamu" className="font-mono text-lg font-bold">
@@ -206,13 +269,25 @@ export function PlanPanel({
             </h2>
             <p className="text-sm text-muted">{current.paid && current.expires_at ? `Aktif sampai ${dateLong(current.expires_at)}` : "Tanpa batas waktu"}</p>
           </div>
-          <p className="tnum mt-3 text-sm">
-            <strong className="font-mono text-base font-semibold">{formatNumber(me.today)}</strong> dari {formatNumber(current.daily)} permintaan terpakai hari ini
+          {current.unlimited ? (
+            <p className="tnum mt-3 text-sm">
+              Tanpa kuota harian. <strong className="font-mono text-base font-semibold">{formatNumber(me.today)}</strong> permintaan hari ini.
+            </p>
+          ) : (
+            <>
+              <p className="tnum mt-3 text-sm">
+                <strong className="font-mono text-base font-semibold">{formatNumber(me.today)}</strong> dari {formatNumber(current.daily)} permintaan terpakai hari ini
+              </p>
+              <div className="mt-2 h-2 bg-subtle" role="progressbar" aria-label="Kuota harian terpakai" aria-valuemin={0} aria-valuemax={current.daily} aria-valuenow={Math.min(me.today, current.daily)}>
+                <span className={`block h-full ${usedPct >= 100 ? "bg-danger" : "bg-accent"}`} style={{ width: `${usedPct}%` }} />
+              </div>
+              <p className="mt-2 text-sm text-muted">Kuota terisi lagi setiap pukul 00.00 WIB.</p>
+            </>
+          )}
+          <p className="tnum mt-3 border-t border-line pt-3 text-sm">
+            Limit tambahan: <strong className="font-mono text-base font-semibold">{formatNumber(extra)}</strong> permintaan
+            <span className="text-muted">{current.unlimited ? ". Tidak terpakai selama paket ini aktif." : extra > 0 ? ". Dipakai setelah kuota harian habis." : "."}</span>
           </p>
-          <div className="mt-2 h-2 bg-subtle" role="progressbar" aria-label="Kuota harian terpakai" aria-valuemin={0} aria-valuemax={current.daily} aria-valuenow={Math.min(me.today, current.daily)}>
-            <span className={`block h-full ${usedPct >= 100 ? "bg-danger" : "bg-accent"}`} style={{ width: `${usedPct}%` }} />
-          </div>
-          <p className="mt-2 text-sm text-muted">Kuota terisi lagi setiap pukul 00.00 WIB.</p>
         </section>
       )}
 
@@ -222,7 +297,7 @@ export function PlanPanel({
             Ada tagihan yang menunggu pembayaran
           </h2>
           <p className="tnum mt-2 text-muted">
-            Paket {plans.find((p) => p.id === open.plan)?.name ?? open.plan} {open.months} bulan, {rupiah(open.total ?? open.amount)}
+            {orderLabel(open)}, {rupiah(open.total ?? open.amount)}
             {open.expires_at ? `, berlaku sampai pukul ${clock(open.expires_at)}` : ""}. Nomor pesanan <span className="wrap-anywhere font-mono text-fg">{open.id}</span>.
           </p>
           <div className="mt-4 flex flex-col gap-2 sm:flex-row">
@@ -238,97 +313,161 @@ export function PlanPanel({
         </section>
       )}
 
-      <ul className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        {plans.map((plan) => {
-          const paid = plan.price > 0;
-          const mine = current?.id === plan.id;
-          return (
-            <li key={plan.id} className={`flex flex-col border bg-card p-5 sm:p-6 ${mine ? "border-[var(--accent-edge)]" : "border-line"}`}>
-              <div className="flex items-start justify-between gap-3">
-                <h2 className="font-mono text-2xl font-bold tracking-tight">{plan.name}</h2>
-                {mine && <span className="shrink-0 border border-[var(--accent-edge)] px-2 py-0.5 text-sm font-semibold">Paket kamu</span>}
-              </div>
-              <p className="tnum mt-2">
-                <span className="font-mono text-[2rem] font-bold leading-tight">{rupiah(plan.price)}</span>
-                {paid && <span className="text-muted"> / {planDays} hari</span>}
-              </p>
-              <p className="mt-2 text-muted">{plan.blurb}</p>
-              <ul className="tnum mt-4 space-y-2">
-                {[
-                  `${formatNumber(plan.daily)} permintaan per hari`,
-                  `${formatNumber(plan.perMinute)} permintaan per menit${paid ? " per akun" : " per IP"}`,
-                  `Semua ${formatNumber(total)} endpoint`,
-                ].map((line) => (
-                  <li key={line} className="flex items-start gap-2">
-                    <CheckIcon className="mt-1 shrink-0 text-ok" />
-                    <span>{line}</span>
-                  </li>
-                ))}
-              </ul>
+      <section aria-labelledby="paket-harian">
+        <h2 id="paket-harian" className="font-mono text-xl font-bold">
+          Pilihan 1: paket harian
+        </h2>
+        <p className="mt-1 max-w-[70ch] text-muted">Kuota per hari yang lebih besar selama paketnya aktif. Harganya per hari, dan kamu sendiri yang menentukan berapa hari.</p>
+        <ul className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+          {plans.map((plan) => {
+            const paid = plan.price > 0;
+            const mine = current?.id === plan.id;
+            // Paket berbayar lain yang masih aktif akan diganti oleh pembelian ini.
+            const replaces = paid && !!current && current.paid && !mine;
+            return (
+              <li key={plan.id} className={`flex flex-col border bg-card p-5 sm:p-6 ${mine ? "border-[var(--accent-edge)]" : "border-line"}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <h3 className="font-mono text-2xl font-bold tracking-tight">{plan.name}</h3>
+                  {mine && <span className="shrink-0 border border-[var(--accent-edge)] px-2 py-0.5 text-sm font-semibold">Paket kamu</span>}
+                </div>
+                <p className="tnum mt-2">
+                  <span className="font-mono text-[2rem] font-bold leading-tight">{rupiah(plan.price)}</span>
+                  {paid && <span className="text-muted"> / hari</span>}
+                </p>
+                <p className="mt-2 text-muted">{plan.blurb}</p>
+                <ul className="tnum mt-4 space-y-2">
+                  {[
+                    plan.unlimited ? "Permintaan per hari tanpa batas" : `${formatNumber(plan.daily)} permintaan per hari`,
+                    `${formatNumber(plan.perMinute)} permintaan per menit${paid ? " per akun" : " per IP"}`,
+                    `Semua ${formatNumber(total)} endpoint`,
+                  ].map((line) => (
+                    <li key={line} className="flex items-start gap-2">
+                      <CheckIcon className="mt-1 shrink-0 text-ok" />
+                      <span>{line}</span>
+                    </li>
+                  ))}
+                </ul>
 
-              <div className="mt-auto pt-6">
-                {!paid ? (
-                  signedIn ? (
-                    <p className="text-sm text-muted">Paket dasar untuk semua akun. Tidak perlu membayar apa pun.</p>
-                  ) : authEnabled ? (
-                    <Link href="/daftar?next=/paket" className="btn btn-secondary w-full">
-                      Daftar gratis
-                      <ArrowIcon />
-                    </Link>
-                  ) : null
-                ) : (
-                  <>
-                    <fieldset>
-                      <legend className="text-sm font-semibold">Lama berlangganan</legend>
-                      <div className="mt-2 grid grid-cols-4 border border-control">
-                        {months.map((m, i) => (
-                          <label key={m} className={`flex min-h-11 cursor-pointer items-center justify-center px-1 text-center text-sm font-medium has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-ring ${i > 0 ? "border-l border-control" : ""} ${pick === m ? "bg-fg text-bg" : "hover:bg-subtle"}`}>
-                            <input type="radio" name={`lama-${plan.id}`} value={m} checked={pick === m} onChange={() => setPick(m)} className="sr-only" />
-                            {m} bulan
-                          </label>
-                        ))}
-                      </div>
-                    </fieldset>
-                    <p className="tnum mt-3">
-                      Total <strong className="font-mono font-semibold">{rupiah(plan.price * pick)}</strong> untuk {formatNumber(days)} hari
-                    </p>
-                    <p className="mt-1 text-sm text-muted">
-                      {feeOnCustomer ? "Belum termasuk biaya QRIS dan kode unik beberapa ratus rupiah; nominal persisnya tampil di halaman bayar." : "Ditambah kode unik beberapa ratus rupiah; nominal persisnya tampil di halaman bayar."}
-                    </p>
-                    <div className="mt-4">
-                      {!authEnabled ? (
-                        <p className="text-sm text-muted">Login belum diaktifkan di server ini, jadi paket belum bisa dibeli.</p>
-                      ) : !signedIn ? (
-                        <Link href="/login?next=/paket" className="btn btn-primary w-full">
-                          Masuk untuk membeli
-                          <ArrowIcon />
-                        </Link>
-                      ) : auth.needsUsername || me?.needsUsername ? (
-                        <Link href="/akun?next=/paket" className="btn btn-primary w-full">
-                          Pilih username dulu
-                          <ArrowIcon />
-                        </Link>
-                      ) : (me ? me.payment : paymentReady) ? (
-                        <button type="button" onClick={() => void buy(plan)} disabled={!!busy} className="btn btn-primary w-full">
-                          {busy === plan.id ? "Membuat tagihan…" : mine ? "Perpanjang dengan QRIS" : "Bayar dengan QRIS"}
-                          {busy !== plan.id && <ArrowIcon />}
-                        </button>
-                      ) : (
-                        <>
-                          <p className="text-sm text-muted">Pembayaran otomatis belum aktif. Untuk membeli paket ini, hubungi owner.</p>
-                          <a href={ownerUrl} target="_blank" rel="noreferrer" className="btn btn-secondary mt-3 w-full">
-                            Hubungi owner lewat WhatsApp
-                          </a>
-                        </>
+                <div className="mt-auto pt-6">
+                  {!paid ? (
+                    signedIn ? (
+                      <p className="text-sm text-muted">Paket dasar untuk semua akun. Tidak perlu membayar apa pun.</p>
+                    ) : authEnabled ? (
+                      <Link href="/daftar?next=/paket" className="btn btn-secondary w-full">
+                        Daftar gratis
+                        <ArrowIcon />
+                      </Link>
+                    ) : null
+                  ) : (
+                    <>
+                      <fieldset>
+                        <legend className="text-sm font-semibold">Lama paket</legend>
+                        <div className="mt-2 grid grid-cols-4 border border-control">
+                          {dayChoices.map((d, i) => (
+                            <label key={d} className={`flex min-h-11 cursor-pointer items-center justify-center px-1 text-center text-sm font-medium has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-ring ${i > 0 ? "border-l border-control" : ""} ${days === d ? "bg-fg text-bg" : "hover:bg-subtle"}`}>
+                              <input type="radio" name={`lama-${plan.id}`} value={d} checked={days === d} onChange={() => setDayText(String(d))} className="sr-only" />
+                              {d} hari
+                            </label>
+                          ))}
+                        </div>
+                      </fieldset>
+                      <label htmlFor={`hari-${plan.id}`} className="mt-3 block text-sm font-medium">
+                        Atau isi jumlah hari sendiri
+                      </label>
+                      <input
+                        id={`hari-${plan.id}`}
+                        inputMode="numeric"
+                        autoComplete="off"
+                        value={dayText}
+                        onChange={(e) => setDayText(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                        aria-invalid={!daysOk}
+                        aria-describedby={`hari-${plan.id}-info`}
+                        className="field tnum mt-1"
+                      />
+                      <p id={`hari-${plan.id}-info`} className={`tnum mt-3 ${daysOk ? "" : "font-medium text-danger"}`}>
+                        {daysOk ? (
+                          <>
+                            Total <strong className="font-mono font-semibold">{rupiah(plan.price * days)}</strong> untuk {formatNumber(days)} hari
+                          </>
+                        ) : (
+                          `Isi jumlah hari dari 1 sampai ${maxDays}.`
+                        )}
+                      </p>
+                      <p className="mt-1 text-sm text-muted">{feeNote}</p>
+                      {replaces && current?.expires_at && (
+                        <p className="mt-2 text-sm font-medium text-danger">
+                          Paket {current.name} kamu masih aktif sampai {dateLong(current.expires_at)}. Membeli paket ini menggantinya, dan sisa harinya hangus.
+                        </p>
                       )}
-                    </div>
-                  </>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+                      {mine && current?.expires_at && daysOk && <p className="mt-2 text-sm text-muted">Hari yang dibeli ditambahkan ke masa aktif yang sekarang.</p>}
+                      <div className="mt-4">
+                        <BuyArea state={buyState} id={plan.id} label={mine ? "Perpanjang dengan QRIS" : "Bayar dengan QRIS"} disabled={!daysOk} what="paket ini" onBuy={() => void buy(plan.id, { plan: plan.id, days })} />
+                      </div>
+                    </>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
+      <section aria-labelledby="paket-limit" className="border border-line bg-card p-5 sm:p-6">
+        <h2 id="paket-limit" className="font-mono text-xl font-bold">
+          Pilihan 2: limit tambahan
+        </h2>
+        <p className="tnum mt-1 max-w-[70ch] text-muted">
+          Beli limit sebanyak yang kamu butuhkan: {rupiah(limit.price * limit.step)} untuk {formatNumber(limit.step)} limit, dan satu limit berarti satu permintaan. Limit dipakai otomatis setelah kuota harian paketmu habis, tidak hangus, dan bisa dipakai bersama paket apa pun.
+        </p>
+        {current && !isAdmin && (
+          <p className="tnum mt-3">
+            Saldo kamu sekarang: <strong className="font-mono font-semibold">{formatNumber(extra)}</strong> limit
+          </p>
+        )}
+        <div className="mt-4 max-w-md">
+          <fieldset>
+            <legend className="text-sm font-semibold">Jumlah limit</legend>
+            <div className="mt-2 grid grid-cols-4 border border-control">
+              {limit.choices.map((n, i) => (
+                <label key={n} className={`tnum flex min-h-11 cursor-pointer items-center justify-center px-1 text-center text-sm font-medium has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-ring ${i > 0 ? "border-l border-control" : ""} ${qty === n ? "bg-fg text-bg" : "hover:bg-subtle"}`}>
+                  <input type="radio" name="jumlah-limit" value={n} checked={qty === n} onChange={() => setQtyText(String(n))} className="sr-only" />
+                  {formatNumber(n)}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <label htmlFor="limit-sendiri" className="mt-3 block text-sm font-medium">
+            Atau isi jumlah limit sendiri
+          </label>
+          <input
+            id="limit-sendiri"
+            inputMode="numeric"
+            autoComplete="off"
+            value={qtyText}
+            onChange={(e) => setQtyText(e.target.value.replace(/\D/g, "").slice(0, 9))}
+            aria-invalid={!qtyOk}
+            aria-describedby="limit-info"
+            className="field tnum mt-1"
+          />
+          <p id="limit-info" className={`tnum mt-3 ${qtyOk ? "" : "font-medium text-danger"}`}>
+            {qtyOk ? (
+              <>
+                Total <strong className="font-mono font-semibold">{rupiah(qty * limit.price)}</strong> untuk {formatNumber(qty)} limit
+              </>
+            ) : (
+              `Isi kelipatan ${formatNumber(limit.step)}, dari ${formatNumber(limit.min)} sampai ${formatNumber(limit.max)}.`
+            )}
+          </p>
+          <p className="tnum mt-1 text-sm text-muted">
+            Pembelian terkecil {formatNumber(limit.min)} limit, karena QRIS tidak menerima pembayaran di bawah {rupiah(limit.min * limit.price)}. {feeNote}
+          </p>
+          {current?.unlimited && !isAdmin && <p className="mt-2 text-sm text-muted">Paket {current.name} kamu sudah tanpa kuota harian, jadi limit ini baru terpakai setelah paketnya berakhir.</p>}
+          <div className="mt-4">
+            {isAdmin && <p className="mb-3 text-sm text-muted">Akun admin tidak terkena kuota harian, jadi limit yang dibeli tersimpan tetapi tidak terpakai.</p>}
+            <BuyArea state={buyState} id={LIMIT_PLAN} label="Beli limit dengan QRIS" disabled={!qtyOk} what="limit tambahan" onBuy={() => void buy(LIMIT_PLAN, { plan: LIMIT_PLAN, qty })} />
+          </div>
+        </div>
+      </section>
 
       {me && me.orders.length > 0 && (
         <section aria-labelledby="paket-riwayat" className="border border-line bg-card p-4 sm:p-6">
@@ -341,7 +480,7 @@ export function PlanPanel({
                 <tr className="border-b border-line text-left text-muted">
                   <th scope="col" className="py-2 pr-3 font-medium">Tanggal</th>
                   <th scope="col" className="py-2 pr-3 font-medium">Pesanan</th>
-                  <th scope="col" className="py-2 pr-3 font-medium">Paket</th>
+                  <th scope="col" className="py-2 pr-3 font-medium">Isi</th>
                   <th scope="col" className="py-2 pr-3 text-right font-medium">Nominal</th>
                   <th scope="col" className="py-2 font-medium">Status</th>
                 </tr>
@@ -351,9 +490,7 @@ export function PlanPanel({
                   <tr key={o.id} className="border-b border-line last:border-b-0">
                     <td className="py-2 pr-3">{dateTime(o.created_at)}</td>
                     <td className="py-2 pr-3 font-mono">{o.id}</td>
-                    <td className="py-2 pr-3">
-                      {plans.find((p) => p.id === o.plan)?.name ?? o.plan}, {o.months} bulan
-                    </td>
+                    <td className="py-2 pr-3">{orderLabel(o)}</td>
                     <td className="py-2 pr-3 text-right font-mono">{rupiah(o.total ?? o.amount)}</td>
                     <td className="py-2">{o.status === "pending" && !payable(o) ? STATUS_LABEL.expired : (STATUS_LABEL[o.status] ?? o.status)}</td>
                   </tr>

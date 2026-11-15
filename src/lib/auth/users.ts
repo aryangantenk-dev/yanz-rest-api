@@ -23,6 +23,8 @@ export type User = {
   plan_expires_at?: string | null;
   /** Akun admin: boleh membuka /admin dan tidak terkena kuota harian. */
   is_admin?: boolean;
+  /** Saldo limit tambahan (dibeli terpisah dari paket), dipakai setelah kuota harian habis. */
+  extra_limit?: number;
   /** Blokir API oleh admin: API key ditolak, tetapi akunnya masih bisa masuk ke situs. Lihat `apiBlockOf`. */
   api_blocked?: boolean;
   /** Akhir blokir; null berarti selamanya. */
@@ -69,7 +71,7 @@ export function userById(id: string): Promise<User | null> {
   return supabaseRpc<User | null>("auth_user", { p_id: id });
 }
 
-export type KeyOwner = { id: string; banned: boolean; plan?: string; plan_expires_at?: string | null; used_today?: number; is_admin?: boolean; api_blocked?: boolean; api_blocked_until?: string | null; api_block_reason?: string };
+export type KeyOwner = { id: string; banned: boolean; plan?: string; plan_expires_at?: string | null; used_today?: number; is_admin?: boolean; api_blocked?: boolean; api_blocked_until?: string | null; api_block_reason?: string; extra_limit?: number };
 
 export function keyOwner(key: string): Promise<KeyOwner | null> {
   return supabaseRpc<KeyOwner | null>("auth_key_user", { p_key: key });
@@ -113,7 +115,7 @@ export async function otpCancel(email: string): Promise<void> {
   await supabaseRpc("auth_otp_cancel", { p_email: email });
 }
 
-export type AdminUsers = { total: number; users: { email: string; username: string; name: string; provider: string; banned: boolean; created_at: string; last_login_at: string; api_key: string; plan?: string; plan_expires_at?: string | null; is_admin?: boolean; used_today?: number; used_total?: number; api_blocked?: boolean; api_blocked_until?: string | null; api_block_reason?: string }[] };
+export type AdminUsers = { total: number; users: { email: string; username: string; name: string; provider: string; banned: boolean; created_at: string; last_login_at: string; api_key: string; plan?: string; plan_expires_at?: string | null; is_admin?: boolean; used_today?: number; used_total?: number; api_blocked?: boolean; api_blocked_until?: string | null; api_block_reason?: string; extra_limit?: number }[] };
 
 export function adminUsers(limit: number): Promise<AdminUsers> {
   return supabaseRpc<AdminUsers>("auth_admin_users", { p_limit: limit });

@@ -11,9 +11,14 @@ export type OrderStatus = "pending" | "paid" | "expired" | "canceled" | "failed"
 export type Order = {
   id: string;
   user_id: string | null;
+  /** Id paket, atau LIMIT_PLAN untuk pembelian limit tambahan. */
   plan: string;
+  /** Hanya terisi pada pesanan lama (paket per bulan); pesanan baru memakai `days` atau `qty`. */
   months: number;
+  /** Jumlah hari paket yang dibeli; 0 untuk pembelian limit tambahan. */
   days: number;
+  /** Jumlah limit tambahan yang dibeli; 0 untuk pembelian paket. */
+  qty: number;
   amount: number;
   total: number | null;
   fee: number | null;
@@ -30,7 +35,8 @@ export function publicOrder(o: Order) {
   return {
     id: o.id,
     plan: o.plan,
-    months: o.months,
+    days: o.days,
+    qty: o.qty ?? 0,
     amount: o.amount,
     total: o.total,
     status: o.status,
@@ -51,8 +57,9 @@ export function newOrderId(): string {
 
 export type Opened = { status: "ok"; reused: boolean; order: Order } | { status: "limit" };
 
-export function orderOpen(id: string, userId: string, plan: string, months: number, days: number, amount: number): Promise<Opened> {
-  return supabaseRpc<Opened>("plan_order_open", { p_id: id, p_user: userId, p_plan: plan, p_months: months, p_days: days, p_amount: amount });
+/** Buka pesanan paket (`days` hari) atau pesanan limit tambahan (`qty` limit, dengan `plan` = LIMIT_PLAN). */
+export function orderOpen(id: string, userId: string, plan: string, days: number, qty: number, amount: number): Promise<Opened> {
+  return supabaseRpc<Opened>("plan_order_open", { p_id: id, p_user: userId, p_plan: plan, p_months: 0, p_days: days, p_amount: amount, p_qty: qty });
 }
 
 export function orderAttach(id: string, pay: Payment): Promise<Order | null> {
@@ -74,8 +81,9 @@ export function orderClose(id: string, status: "expired" | "canceled" | "failed"
 export type Paid = { status: "paid" | "already"; order: Order } | { status: "none" | "mismatch" };
 
 /**
- * Tandai pesanan lunas dan aktifkan paketnya. Aman dipanggil berkali-kali (webhook bisa
- * terkirim ulang, dan halaman /paket juga memeriksa sendiri): paket hanya diaktifkan sekali.
+ * Tandai pesanan lunas dan aktifkan paketnya, atau tambahkan limit yang dibeli ke saldo akunnya.
+ * Aman dipanggil berkali-kali (webhook bisa terkirim ulang, dan halaman /paket juga memeriksa
+ * sendiri): pesanan hanya diproses sekali.
  * `amount` adalah nominal menurut gateway dan harus sama dengan nominal pesanan.
  */
 export async function orderPaid(id: string, gatewayRef: string, amount: number): Promise<Paid> {
@@ -125,4 +133,11 @@ export type AdminOrders = { paid: number; paid_amount: number; orders: Record<st
 
 export function adminOrders(limit: number): Promise<AdminOrders> {
   return supabaseRpc<AdminOrders>("plan_admin_orders", { p_limit: limit });
+}
+
+export type AdminLimit = { email: string; username: string; extra_limit: number };
+
+/** Tambah (atau kurangi, bila `amount` negatif) saldo limit tambahan sebuah akun tanpa pembayaran. null bila akunnya tidak ada. */
+export function adminAddLimit(email: string, amount: number): Promise<AdminLimit | null> {
+  return supabaseRpc<AdminLimit | null>("plan_admin_add_limit", { p_email: email, p_amount: amount });
 }

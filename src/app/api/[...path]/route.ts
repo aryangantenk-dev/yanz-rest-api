@@ -5,7 +5,7 @@ import { SITE_CREATOR, getOrigin } from "@/lib/site";
 import { recordHit } from "@/lib/stats";
 import { APPEAL_URL, OWNER_WA, RATE_LIMIT, clientIp, guard, ipBusy } from "@/lib/guard";
 import { KEY_REQUIRED } from "@/lib/auth/config";
-import { keyBlock, keyFromRequest, keyKnown, keyOwnerId, keyPaid, keyQuota, keyUse, verifyKey, withKeyInHtml, withKeyInLinks } from "@/lib/auth/apikey";
+import { keyBlock, keyFromRequest, keyKnown, keyOwnerId, keyPaid, keyQuota, keyRefundExtra, keyUse, verifyKey, withKeyInHtml, withKeyInLinks } from "@/lib/auth/apikey";
 import { formatNumber } from "@/lib/plans";
 import { recordUsage } from "@/lib/auth/usage";
 import { endpointBlock } from "@/lib/blocks";
@@ -105,6 +105,8 @@ async function handle(req: Request, ctx: RouteCtx) {
     );
   }
 
+  /** Kuota harian sudah habis: permintaan ini memotong limit tambahan. */
+  let fromExtra = false;
   if (KEY_REQUIRED) {
     if (!apiKey) {
       return fail(
@@ -137,30 +139,42 @@ async function handle(req: Request, ctx: RouteCtx) {
       return fail(403, `API key tidak valid atau sudah diganti. Lihat API key kamu yang berlaku di ${origin}/akun.`, rlHeaders, { login: `${origin}/login` });
     }
 
-    // Kuota harian paket pemilik key. Terisi lagi pukul 00.00 WIB. Akun admin tidak terkena kuota.
+    // Kuota harian paket pemilik key. Terisi lagi pukul 00.00 WIB. Akun admin dan paket tanpa
+    // batas tidak terkena kuota. Setelah kuota harian habis, permintaan memotong limit tambahan.
     const quota = keyQuota(apiKey);
-    if (quota.unlimited) rlHeaders = { ...rlHeaders, "x-plan": "admin" };
-    const quotaHeaders = (left: number) => ({ "x-plan": quota.plan.id, "x-quota-limit": String(quota.plan.daily), "x-quota-remaining": String(left), "x-quota-reset": String(quota.resetIn) });
+    if (quota.unlimited) rlHeaders = { ...rlHeaders, "x-plan": quota.admin ? "admin" : quota.plan.id };
+    const quotaHeaders = (left: number, extra: number) => ({ "x-plan": quota.plan.id, "x-quota-limit": String(quota.plan.daily), "x-quota-remaining": String(left), "x-quota-reset": String(quota.resetIn), "x-limit-extra": String(extra) });
     if (!quota.unlimited && quota.left <= 0) {
-      return fail(
-        429,
-        `Kuota harian paket ${quota.plan.name} (${formatNumber(quota.plan.daily)} permintaan) sudah habis. Kuota terisi lagi pukul 00.00 WIB. Butuh lebih banyak? Lihat pilihan paket di ${origin}/paket.`,
-        { ...rlHeaders, ...quotaHeaders(0), "retry-after": String(quota.resetIn) },
-        { plan: quota.plan.id, quota: quota.plan.daily, used: quota.used, retry_after: quota.resetIn, upgrade: `${origin}/paket` },
-      );
+      if (quota.extra <= 0) {
+        return fail(
+          429,
+          `Kuota harian paket ${quota.plan.name} (${formatNumber(quota.plan.daily)} permintaan) sudah habis dan akun ini tidak punya limit tambahan. Kuota terisi lagi pukul 00.00 WIB. Butuh lebih banyak? Naikkan paket atau beli limit tambahan di ${origin}/paket.`,
+          { ...rlHeaders, ...quotaHeaders(0, 0), "retry-after": String(quota.resetIn) },
+          { plan: quota.plan.id, quota: quota.plan.daily, used: quota.used, extra: 0, retry_after: quota.resetIn, upgrade: `${origin}/paket` },
+        );
+      }
+      fromExtra = true;
     }
-    keyUse(apiKey);
-    if (!quota.unlimited) rlHeaders = { ...rlHeaders, ...quotaHeaders(quota.left - 1) };
+    keyUse(apiKey, fromExtra);
+    if (!quota.unlimited) rlHeaders = { ...rlHeaders, ...quotaHeaders(fromExtra ? 0 : quota.left - 1, fromExtra ? quota.extra - 1 : quota.extra) };
   }
 
   // Pemilik key, untuk statistik pemakaian di /dashboard. null bila API key tidak diwajibkan.
   const ownerId = KEY_REQUIRED ? keyOwnerId(apiKey) : null;
 
+  /** Kesalahan di sisi server tidak memotong limit tambahan: kembalikan satu limit yang tadi dipotong. */
+  const refundExtra = () => {
+    keyRefundExtra(apiKey);
+    if (rlHeaders["x-limit-extra"] !== undefined) rlHeaders = { ...rlHeaders, "x-limit-extra": String(Number(rlHeaders["x-limit-extra"]) + 1) };
+  };
+
   const started = Date.now();
   try {
     const result = await endpoint.handler({ req, sp, origin });
     recordHit(key);
-    recordUsage(ownerId, key, result instanceof Response ? result.status : 200, Date.now() - started);
+    const status = result instanceof Response ? result.status : 200;
+    if (fromExtra && status >= 500) refundExtra();
+    recordUsage(ownerId, key, status, Date.now() - started, fromExtra && status < 500);
 
     if (result instanceof Response) {
       let res = result;
@@ -182,7 +196,9 @@ async function handle(req: Request, ctx: RouteCtx) {
       headers: { "content-type": "application/json; charset=utf-8", ...CORS, ...rlHeaders },
     });
   } catch (e) {
-    recordUsage(ownerId, key, e instanceof HttpError ? e.status : 500, Date.now() - started);
+    const status = e instanceof HttpError ? e.status : 500;
+    if (fromExtra && status >= 500) refundExtra();
+    recordUsage(ownerId, key, status, Date.now() - started, fromExtra && status < 500);
     if (e instanceof HttpError) return fail(e.status, e.message, rlHeaders);
     console.error(`[api/${key}]`, e);
     return fail(500, "Terjadi kesalahan internal pada server.", rlHeaders);

@@ -78,7 +78,7 @@ async function usage(req: Request) {
   try {
     const user = await userById(id);
     if (!user || user.banned) return fail(401, "Sesi berakhir. Masuk lagi untuk melihat statistik.", {}, clearSessionCookie(isSecure(req)));
-    const plan = planView(user.plan, user.plan_expires_at, user.is_admin === true);
+    const plan = planView(user.plan, user.plan_expires_at, user.is_admin === true, user.extra_limit);
     return json(200, { usage: await usageSummary(id), limit: plan.perMinute, plan });
   } catch (e) {
     console.error("[auth/usage]", e);

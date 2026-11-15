@@ -8,15 +8,17 @@ import { RATE_LIMIT } from "./limits";
  * Menambah paket: tambahkan satu entri di PLANS dan id-nya di PlanId. Database hanya
  * menyimpan id paket, jadi tidak perlu migrasi.
  */
-export type PlanId = "free" | "pro";
+export type PlanId = "free" | "pro" | "enterprise" | "bisnis";
 
 export type Plan = {
   id: PlanId;
   name: string;
-  /** Harga dalam rupiah untuk PLAN_DAYS hari. 0 = gratis. */
+  /** Harga dalam rupiah untuk satu hari. 0 = gratis. Pembeli memilih sendiri jumlah harinya. */
   price: number;
-  /** Kuota permintaan per hari (WIB) untuk satu akun. */
+  /** Kuota permintaan per hari (WIB) untuk satu akun. 0 dan tidak dipakai bila `unlimited`. */
   daily: number;
+  /** Tanpa kuota harian: permintaan hanya dibatasi oleh `perMinute`. */
+  unlimited?: boolean;
   /** Batas permintaan per menit untuk setiap alamat IP. */
   perMinute: number;
   /** Untuk siapa paket ini, satu kalimat. */
@@ -24,14 +26,33 @@ export type Plan = {
 };
 
 export const PLANS: readonly Plan[] = [
-  { id: "free", name: "Gratis", price: 0, daily: 1_000, perMinute: RATE_LIMIT, blurb: "Untuk belajar, proyek hobi, dan bot pribadi." },
-  { id: "pro", name: "Pro", price: 15_000, daily: 50_000, perMinute: Math.max(300, RATE_LIMIT), blurb: "Untuk bot dan aplikasi yang dipakai banyak orang." },
+  { id: "free", name: "Gratis", price: 0, daily: 50, perMinute: RATE_LIMIT, blurb: "Untuk mencoba API dan belajar." },
+  { id: "pro", name: "Pro", price: 1_000, daily: 1_000, perMinute: Math.max(300, RATE_LIMIT), blurb: "Untuk bot pribadi dan proyek hobi." },
+  { id: "enterprise", name: "Enterprise", price: 2_500, daily: 7_000, perMinute: Math.max(300, RATE_LIMIT), blurb: "Untuk bot dan aplikasi yang dipakai banyak orang." },
+  { id: "bisnis", name: "Bisnis", price: 5_000, daily: 0, unlimited: true, perMinute: Math.max(600, RATE_LIMIT), blurb: "Tanpa kuota harian, untuk layanan yang ramai sepanjang hari." },
 ];
 
-/** Lama satu masa aktif paket berbayar, dalam hari. */
+/** Lama bawaan saat admin memberi paket lewat panel admin, dalam hari. */
 export const PLAN_DAYS = 30;
-/** Pilihan lama berlangganan dalam sekali bayar (kelipatan PLAN_DAYS). */
-export const PLAN_MONTHS: readonly number[] = [1, 3, 6, 12];
+/** Pilihan cepat jumlah hari di halaman /paket; pembeli juga bisa mengisi sendiri. */
+export const PLAN_DAY_CHOICES: readonly number[] = [1, 3, 7, 30];
+/** Jumlah hari terbanyak dalam sekali bayar. */
+export const MAX_PLAN_DAYS = 365;
+
+/**
+ * Limit tambahan: saldo permintaan yang dibeli terpisah dari paket. Dipakai setelah kuota
+ * harian habis, tidak hangus, dan tidak terisi ulang sendiri. Pesanannya memakai id paket LIMIT_PLAN.
+ */
+export const LIMIT_PLAN = "limit";
+/** Harga satu limit (satu permintaan), dalam rupiah: 100 limit = Rp100. */
+export const LIMIT_PRICE = 1;
+/** Pembelian harus kelipatan ini. */
+export const LIMIT_STEP = 100;
+/** Pembelian terkecil; payment gateway tidak menerima pembayaran di bawah Rp1.000. */
+export const LIMIT_MIN = 1_000;
+export const LIMIT_MAX = 1_000_000;
+/** Pilihan cepat jumlah limit di halaman /paket. */
+export const LIMIT_CHOICES: readonly number[] = [1_000, 5_000, 10_000, 50_000];
 
 export const FREE_PLAN = PLANS[0];
 
@@ -60,15 +81,18 @@ export type PlanView = {
   /** Paket berbayar yang masih aktif. */
   paid: boolean;
   expires_at: string | null;
-  /** Akun admin: tanpa kuota harian. */
+  /** Tanpa kuota harian: akun admin (id "admin") atau paket tanpa batas. */
   unlimited: boolean;
+  /** Saldo limit tambahan, dipakai setelah kuota harian habis. */
+  extra: number;
 };
 
-export function planView(id: string | null | undefined, expiresAt: string | null | undefined, admin = false): PlanView {
-  if (admin) return { id: "admin", name: "Admin", daily: 0, perMinute: ADMIN_PER_MINUTE, paid: false, expires_at: null, unlimited: true };
+export function planView(id: string | null | undefined, expiresAt: string | null | undefined, admin = false, extra: number | null | undefined = 0): PlanView {
+  const left = Math.max(0, Math.floor(Number(extra) || 0));
+  if (admin) return { id: "admin", name: "Admin", daily: 0, perMinute: ADMIN_PER_MINUTE, paid: false, expires_at: null, unlimited: true, extra: left };
   const plan = activePlan(id, expiresAt);
   const paid = plan.price > 0;
-  return { id: plan.id, name: plan.name, daily: plan.daily, perMinute: plan.perMinute, paid, expires_at: paid ? (expiresAt ?? null) : null, unlimited: false };
+  return { id: plan.id, name: plan.name, daily: plan.daily, perMinute: plan.perMinute, paid, expires_at: paid ? (expiresAt ?? null) : null, unlimited: plan.unlimited === true, extra: left };
 }
 
 const nf = new Intl.NumberFormat("id-ID");

@@ -1139,3 +1139,240 @@ revoke all on function public.auth_admin_usage(text, integer, integer) from publ
 grant execute on function public.auth_usage_record(uuid, text, boolean, integer, integer) to service_role;
 grant execute on function public.auth_usage_history(uuid, integer) to service_role;
 grant execute on function public.auth_admin_usage(text, integer, integer) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Paket harian dan limit tambahan.
+-- Paket sekarang dihargai per hari dan pembeli memilih jumlah harinya (api_orders.days).
+-- Limit tambahan adalah saldo permintaan per akun (api_users.extra_limit) yang dibeli
+-- terpisah: pesanannya memakai plan = 'limit' dan qty = jumlah limit. Saldo itu dipotong
+-- satu per permintaan setelah kuota harian paket habis, dan tidak pernah hangus.
+-- ---------------------------------------------------------------------------
+
+alter table public.api_users add column if not exists extra_limit integer not null default 0;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'api_users_extra_limit_check') then
+    alter table public.api_users add constraint api_users_extra_limit_check check (extra_limit >= 0);
+  end if;
+end;
+$$;
+
+-- qty: jumlah limit yang dibeli (0 untuk pesanan paket). months hanya terisi pada pesanan lama.
+alter table public.api_orders add column if not exists qty integer not null default 0;
+alter table public.api_orders alter column months set default 0;
+
+create or replace function public.auth_user_json(u public.api_users)
+returns json
+language sql
+immutable
+set search_path = ''
+as $$
+  select json_build_object(
+    'id', u.id, 'email', u.email, 'name', u.name, 'avatar', u.avatar, 'provider', u.provider,
+    'username', coalesce(u.username, ''), 'photo', u.photo,
+    'api_key', u.api_key, 'banned', u.banned, 'created_at', u.created_at, 'last_login_at', u.last_login_at,
+    'plan', u.plan, 'plan_expires_at', u.plan_expires_at, 'is_admin', u.is_admin,
+    'api_blocked', u.api_blocked, 'api_blocked_until', u.api_blocked_until, 'api_block_reason', u.api_block_reason,
+    'extra_limit', u.extra_limit
+  );
+$$;
+
+create or replace function public.auth_key_user(p_key text)
+returns json
+language sql
+stable
+set search_path = ''
+as $$
+  select json_build_object(
+    'id', u.id, 'banned', u.banned, 'is_admin', u.is_admin,
+    'api_blocked', u.api_blocked, 'api_blocked_until', u.api_blocked_until, 'api_block_reason', u.api_block_reason,
+    'plan', case when u.plan <> 'free' and u.plan_expires_at > now() then u.plan else 'free' end,
+    'plan_expires_at', u.plan_expires_at,
+    'extra_limit', u.extra_limit,
+    'used_today', coalesce((
+      select sum(a.hits) from public.api_usage a
+      where a.user_id = u.id and a.day = (now() at time zone 'Asia/Jakarta')::date
+    ), 0)
+  )
+  from public.api_users u where u.api_key = p_key;
+$$;
+
+create or replace function public.auth_admin_users(p_limit integer)
+returns json
+language sql
+stable
+set search_path = ''
+as $$
+  select json_build_object(
+    'total', (select count(*) from public.api_users),
+    'users', (
+      select coalesce(json_agg(t), '[]'::json) from (
+        select u.email, coalesce(u.username, '') as username, u.name, u.provider, u.banned, u.is_admin, u.created_at, u.last_login_at,
+               left(u.api_key, 7) || '…' || right(u.api_key, 4) as api_key,
+               case when u.plan <> 'free' and u.plan_expires_at > now() then u.plan else 'free' end as plan, u.plan_expires_at,
+               coalesce((select sum(a.hits) from public.api_usage a where a.user_id = u.id and a.day = (now() at time zone 'Asia/Jakarta')::date), 0) as used_today,
+               coalesce((select x.hits from public.api_usage_totals x where x.user_id = u.id), 0) as used_total,
+               (u.api_blocked and (u.api_blocked_until is null or u.api_blocked_until > now())) as api_blocked,
+               u.api_blocked_until, u.api_block_reason, u.extra_limit
+        from public.api_users u order by u.created_at desc limit greatest(1, least(p_limit, 500))
+      ) t
+    )
+  );
+$$;
+
+-- Catat satu permintaan. p_extra: permintaan ini memakai limit tambahan (kuota harian sudah
+-- habis), jadi saldonya dipotong satu dan tidak pernah turun di bawah nol.
+drop function if exists public.auth_usage_record(uuid, text, boolean, integer, integer);
+create or replace function public.auth_usage_record(p_id uuid, p_path text, p_ok boolean, p_status integer, p_ms integer, p_extra boolean default false)
+returns void
+language plpgsql
+set search_path = ''
+as $$
+begin
+  perform public.auth_usage_hit(p_id, p_path, p_ok);
+  if p_extra then
+    update public.api_users set extra_limit = extra_limit - 1 where id = p_id and extra_limit > 0;
+  end if;
+  begin
+    insert into public.api_usage_log (user_id, path, status, ms)
+    values (p_id, left(p_path, 120), greatest(100, least(coalesce(p_status, 200), 599)), greatest(0, least(coalesce(p_ms, 0), 3600000)));
+
+    -- Sesekali buang baris di luar 200 permintaan terakhir akun ini supaya tabel tidak terus membesar.
+    if random() < 0.05 then
+      delete from public.api_usage_log l
+      where l.user_id = p_id
+        and l.id < (select k.id from public.api_usage_log k where k.user_id = p_id order by k.id desc offset 199 limit 1);
+    end if;
+  exception
+    when foreign_key_violation then
+      null; -- akunnya sudah dihapus
+  end;
+end;
+$$;
+
+revoke all on function public.auth_usage_record(uuid, text, boolean, integer, integer, boolean) from public, anon, authenticated;
+grant execute on function public.auth_usage_record(uuid, text, boolean, integer, integer, boolean) to service_role;
+
+-- Buka pesanan baru, atau pakai lagi pesanan serupa yang masih menunggu. p_qty > 0 hanya
+-- untuk pesanan limit tambahan (p_plan = 'limit'); pesanan paket memakai p_days.
+drop function if exists public.plan_order_open(text, uuid, text, integer, integer, integer);
+create or replace function public.plan_order_open(p_id text, p_user uuid, p_plan text, p_months integer, p_days integer, p_amount integer, p_qty integer default 0)
+returns json
+language plpgsql
+set search_path = ''
+as $$
+declare
+  o public.api_orders;
+begin
+  select * into o from public.api_orders
+  where user_id = p_user and status = 'pending' and plan = p_plan and days = p_days and qty = p_qty and amount = p_amount
+    and ((expires_at is null and created_at > now() - interval '5 minutes') or expires_at > now() + interval '2 minutes')
+  order by created_at desc limit 1;
+  if found then
+    return json_build_object('status', 'ok', 'reused', true, 'order', row_to_json(o));
+  end if;
+  if (select count(*) from public.api_orders where user_id = p_user and created_at > now() - interval '1 hour') >= 10 then
+    return json_build_object('status', 'limit');
+  end if;
+  insert into public.api_orders (id, user_id, plan, months, days, qty, amount)
+  values (p_id, p_user, p_plan, coalesce(p_months, 0), p_days, coalesce(p_qty, 0), p_amount)
+  returning * into o;
+  return json_build_object('status', 'ok', 'reused', false, 'order', row_to_json(o));
+end;
+$$;
+
+revoke all on function public.plan_order_open(text, uuid, text, integer, integer, integer, integer) from public, anon, authenticated;
+grant execute on function public.plan_order_open(text, uuid, text, integer, integer, integer, integer) to service_role;
+
+-- Tandai pesanan lunas, dalam satu transaksi dan hanya sekali. Pesanan paket mengaktifkan
+-- paketnya (paket yang sama menambah masa aktif, paket lain mulai dari sekarang); pesanan
+-- limit tambahan menambah saldo extra_limit dan tidak menyentuh paket.
+create or replace function public.plan_order_paid(p_id text, p_ref text, p_amount integer)
+returns json
+language plpgsql
+set search_path = ''
+as $$
+declare
+  o public.api_orders;
+  u public.api_users;
+  base timestamptz;
+  v_plan text;
+  v_until timestamptz;
+  v_extra integer;
+begin
+  select * into o from public.api_orders where id = p_id for update;
+  if not found then
+    return json_build_object('status', 'none');
+  end if;
+  if o.status = 'paid' then
+    return json_build_object('status', 'already', 'order', row_to_json(o));
+  end if;
+  if p_amount is distinct from o.amount then
+    return json_build_object('status', 'mismatch');
+  end if;
+
+  select * into u from public.api_users where id = o.user_id for update;
+  if found then
+    if o.plan = 'limit' then
+      update public.api_users set extra_limit = extra_limit + greatest(0, o.qty) where id = u.id
+      returning plan, plan_expires_at, extra_limit into v_plan, v_until, v_extra;
+    else
+      base := case when u.plan = o.plan and u.plan_expires_at > now() then u.plan_expires_at else now() end;
+      update public.api_users set plan = o.plan, plan_expires_at = base + make_interval(days => o.days) where id = u.id
+      returning plan, plan_expires_at, extra_limit into v_plan, v_until, v_extra;
+    end if;
+  end if;
+
+  update public.api_orders
+  set status = 'paid', paid_at = now(), gateway_ref = case when coalesce(p_ref, '') <> '' then p_ref else gateway_ref end
+  where id = p_id
+  returning * into o;
+  return json_build_object('status', 'paid', 'order', row_to_json(o), 'plan', v_plan, 'plan_expires_at', v_until, 'extra_limit', v_extra);
+end;
+$$;
+
+-- Untuk owner (/api/admin/addlimit): tambah saldo limit tambahan sebuah akun tanpa
+-- pembayaran. p_amount negatif mengurangi; saldo tidak pernah turun di bawah nol.
+create or replace function public.plan_admin_add_limit(p_email text, p_amount integer)
+returns json
+language plpgsql
+set search_path = ''
+as $$
+declare
+  u public.api_users;
+begin
+  update public.api_users
+  set extra_limit = least(2000000000::bigint, greatest(0::bigint, extra_limit::bigint + coalesce(p_amount, 0)))::integer
+  where email = lower(p_email)
+  returning * into u;
+  if not found then
+    return null;
+  end if;
+  return json_build_object('email', u.email, 'username', coalesce(u.username, ''), 'extra_limit', u.extra_limit);
+end;
+$$;
+
+revoke all on function public.plan_admin_add_limit(text, integer) from public, anon, authenticated;
+grant execute on function public.plan_admin_add_limit(text, integer) to service_role;
+
+-- Untuk owner (/api/admin/orders): pesanan terbaru beserta email pembelinya.
+create or replace function public.plan_admin_orders(p_limit integer)
+returns json
+language sql
+stable
+set search_path = ''
+as $$
+  select json_build_object(
+    'paid', (select count(*) from public.api_orders where status = 'paid'),
+    'paid_amount', (select coalesce(sum(amount), 0) from public.api_orders where status = 'paid'),
+    'orders', (
+      select coalesce(json_agg(t), '[]'::json) from (
+        select o.id, coalesce(u.email, '') as email, coalesce(u.username, '') as username, o.plan, o.months, o.days, o.qty, o.amount, o.total,
+               o.status, o.gateway_ref, o.created_at, o.paid_at
+        from public.api_orders o left join public.api_users u on u.id = o.user_id
+        order by o.created_at desc limit greatest(1, least(p_limit, 500))
+      ) t
+    )
+  );
+$$;

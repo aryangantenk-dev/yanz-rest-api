@@ -9,9 +9,9 @@ import { sameSite } from "@/lib/auth/origin";
 import { sessionUserId } from "@/lib/auth/session";
 import { HISTORY_KEEP, adminUserUsage } from "@/lib/auth/usage";
 import { adminUsers, apiBlockedUsers, normalizeEmail, setAdmin, setApiBlock, setBanned, userById, type User } from "@/lib/auth/users";
-import { adminOrders, adminSetPlan } from "@/lib/billing/orders";
+import { adminAddLimit, adminOrders, adminSetPlan } from "@/lib/billing/orders";
 import { FEE_ON_CUSTOMER, GATEWAY_READY, WEBHOOK_READY, pingGateway } from "@/lib/billing/welper";
-import { PLANS, PLAN_DAYS, planById } from "@/lib/plans";
+import { LIMIT_MIN, LIMIT_PRICE, LIMIT_STEP, PLANS, PLAN_DAYS, planById } from "@/lib/plans";
 import { SITE_CREATOR, getOrigin } from "@/lib/site";
 
 export const dynamic = "force-dynamic";
@@ -35,6 +35,7 @@ export const runtime = "nodejs";
  *   /api/admin/keyblock?email=..&duration=7d&reason=..&key=..   blokir API sebuah akun: API key-nya ditolak, akunnya masih bisa masuk.
  *                                                        duration: 30m, 6h, 7d (menit/jam/hari), atau permanent (bawaan)
  *   /api/admin/keyunblock?email=..&key=..       buka blokir API
+ *   /api/admin/addlimit?email=..&amount=1000&key=..   tambah limit tambahan sebuah akun tanpa pembayaran (angka negatif mengurangi)
  *   /api/admin/setplan?email=..&plan=pro&days=30&key=..   beri paket tanpa pembayaran (menambah masa aktif);
  *                                                        plan=free mengembalikan akun ke paket gratis
  *   /api/admin/orders?key=ADMIN_KEY             100 pesanan paket terbaru dan total yang lunas
@@ -144,6 +145,9 @@ export async function GET(req: Request, ctx: { params: Promise<{ action: string 
         result: {
           plans: PLANS,
           plan_days: PLAN_DAYS,
+          limit_price: LIMIT_PRICE,
+          limit_step: LIMIT_STEP,
+          limit_min: LIMIT_MIN,
           api_key_set: GATEWAY_READY,
           webhook_secret_set: WEBHOOK_READY,
           fee_bearer: FEE_ON_CUSTOMER ? "customer" : "merchant",
@@ -152,7 +156,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ action: string 
         },
       });
     }
-    if (action === "users" || action === "userban" || action === "userunban" || action === "setplan" || action === "orders" || action === "setadmin" || action === "keyblocks" || action === "keyblock" || action === "keyunblock" || action === "userusage") {
+    if (action === "users" || action === "userban" || action === "userunban" || action === "setplan" || action === "orders" || action === "setadmin" || action === "keyblocks" || action === "keyblock" || action === "keyunblock" || action === "userusage" || action === "addlimit") {
       if (!AUTH_BASE_READY) return json(503, { error: "Login belum dikonfigurasi di server ini (butuh Supabase dan AUTH_SECRET)." });
       if (action === "userusage") {
         const email = normalizeEmail(sp.get("email"));
@@ -200,6 +204,16 @@ export async function GET(req: Request, ctx: { params: Promise<{ action: string 
       }
       if (action === "users") return json(200, { result: await adminUsers(100) });
       if (action === "orders") return json(200, { result: await adminOrders(100) });
+      if (action === "addlimit") {
+        const email = normalizeEmail(sp.get("email"));
+        if (!email) return json(400, { error: "Parameter 'email' wajib diisi dengan alamat email akun." });
+        const amount = Number((sp.get("amount") || "").trim());
+        if (!Number.isInteger(amount) || amount === 0 || Math.abs(amount) > 10_000_000) return json(400, { error: "Parameter 'amount' harus bilangan bulat selain 0, paling banyak 10.000.000. Angka negatif mengurangi saldo." });
+        const set = await adminAddLimit(email, amount);
+        if (!set) return json(404, { error: "Tidak ada akun dengan email itu." });
+        forgetAllKeys();
+        return json(200, { result: { ...set, message: `Limit tambahan akun ini sekarang ${set.extra_limit}. Berlaku di semua server paling lama satu menit lagi.` } });
+      }
       if (action === "setplan") {
         const email = normalizeEmail(sp.get("email"));
         if (!email) return json(400, { error: "Parameter 'email' wajib diisi dengan alamat email akun." });
@@ -235,7 +249,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ action: string 
       await adminBan(ip, reason);
       return json(200, { result: { ip, banned: true, reason } });
     }
-    return json(404, { error: "Aksi tidak dikenal. Gunakan: bans, ban, unban, userusage, keyblocks, keyblock, keyunblock, apiblocks, apiblock, apiunblock, images, delimage, users, userban, userunban, setplan, setadmin, orders, paket." });
+    return json(404, { error: "Aksi tidak dikenal. Gunakan: bans, ban, unban, userusage, addlimit, keyblocks, keyblock, keyunblock, apiblocks, apiblock, apiunblock, images, delimage, users, userban, userunban, setplan, setadmin, orders, paket." });
   } catch (e) {
     console.error("[api/admin]", e);
     return json(502, { error: "Gagal menghubungi database atau penyimpanan." });

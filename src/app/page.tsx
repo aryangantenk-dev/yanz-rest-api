@@ -12,7 +12,7 @@ import { APPEAL_URL } from "@/lib/guard";
 import { colorizeJson } from "@/lib/highlight";
 import { RATE_LIMIT } from "@/lib/limits";
 import { KEY_REQUIRED } from "@/lib/auth/config";
-import { FREE_PLAN, PLANS, PLAN_DAYS, formatNumber, rupiah } from "@/lib/plans";
+import { FREE_PLAN, LIMIT_PRICE, LIMIT_STEP, PLANS, formatNumber, rupiah } from "@/lib/plans";
 import { showcase, showcaseHost } from "@/lib/showcase";
 import { SITE_CREATOR, SITE_NAME, SITE_TAGLINE, SITE_URL, SUPPORT_URL } from "@/lib/site";
 
@@ -20,7 +20,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "/" },
 };
 
-const PAID_PLAN = PLANS.find((p) => p.price > 0);
+const PAID_PLANS = PLANS.filter((p) => p.price > 0);
 
 const steps = [
   KEY_REQUIRED
@@ -54,11 +54,11 @@ const faqs = [
       KEY_REQUIRED ? `Paket ${FREE_PLAN.name} memberi ${formatNumber(FREE_PLAN.daily)} permintaan per hari untuk setiap akun, dan kuotanya terisi lagi pukul 00.00 WIB. ` : ""
     }Untuk menjaga kualitas layanan, berlaku batas ${RATE_LIMIT} permintaan per menit untuk setiap alamat IP. IP yang berulang kali melewati batas akan diblokir dan bisa mengajukan banding ke owner lewat WhatsApp.`,
   },
-  ...(KEY_REQUIRED && PAID_PLAN
+  ...(KEY_REQUIRED && PAID_PLANS.length > 0
     ? [
         {
-          q: `Apa bedanya paket ${FREE_PLAN.name} dan ${PAID_PLAN.name}?`,
-          a: `Semua endpoint bisa dipakai di kedua paket. Paket ${PAID_PLAN.name} (${rupiah(PAID_PLAN.price)} per ${PLAN_DAYS} hari, dibayar lewat QRIS) menaikkan kuota menjadi ${formatNumber(PAID_PLAN.daily)} permintaan per hari dan ${formatNumber(PAID_PLAN.perMinute)} per menit per akun. Rinciannya ada di halaman Paket.`,
+          q: `Bagaimana kalau ${formatNumber(FREE_PLAN.daily)} permintaan per hari tidak cukup?`,
+          a: `Semua endpoint bisa dipakai di paket mana pun; yang berbeda hanya jatah permintaannya. Ada dua pilihan, keduanya dibayar lewat QRIS. Pertama, paket harian dengan jumlah hari yang kamu tentukan sendiri: ${PAID_PLANS.map((p) => `${p.name} ${rupiah(p.price)} per hari (${p.unlimited ? "tanpa batas permintaan per hari" : `${formatNumber(p.daily)} permintaan per hari`})`).join(", ")}. Kedua, limit tambahan seharga ${rupiah(LIMIT_PRICE * LIMIT_STEP)} per ${formatNumber(LIMIT_STEP)} limit, yang dipakai setelah kuota harian habis dan tidak hangus. Rinciannya ada di halaman Paket.`,
         },
       ]
     : []),

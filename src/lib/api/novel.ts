@@ -140,6 +140,7 @@ function apiHeaders(referer: string): Record<string, string> {
 const JSON_HEADERS = {
   accept: "application/json, text/plain, */*",
   "content-type": "application/json",
+  origin: BASE,
   "sec-fetch-site": "same-origin",
   "sec-fetch-mode": "cors",
   "sec-fetch-dest": "empty",
@@ -250,6 +251,19 @@ function genreLabels(html: string, ids: unknown): string[] {
   return [...byId.values()];
 }
 
+/**
+ * Tandai langkah mana yang gagal. Pesan galat dari fetchJson sudah menyebut status; awalan ini
+ * membuat penyebab 403 di situs sumber (panggilan API atau berkas isi) langsung kelihatan.
+ */
+async function step<T>(label: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (e) {
+    if (e instanceof HttpError && e.status >= 500) throw new HttpError(e.status, `[${label}] ${e.message}`);
+    throw e;
+  }
+}
+
 /** Id chapter (bukan nomor urut) yang dipakai klien WTR-LAB saat memanggil /api/reader/get. */
 async function findChapterId(rawId: number, order: number): Promise<number | null> {
   const res = await fetchJson<{ chapters?: Chapter[] }>(
@@ -267,7 +281,7 @@ async function chapterContent(rawId: number, slug: string, order: number) {
   // Pastikan cookie Cloudflare terisi (GET halaman chapter) sebelum memanggil API baca.
   if (!jarCookie()) await html(`/en/novel/${rawId}/${slug || "novel"}/chapter-${order}`).catch(() => "");
   const chapterId = await findChapterId(rawId, order);
-  const reader = await fetchJson<{
+  type ReaderReply = {
     success?: boolean;
     error?: string;
     message?: string;
@@ -275,18 +289,21 @@ async function chapterContent(rawId: number, slug: string, order: number) {
     requireTurnstile?: boolean;
     content_url?: string;
     chapter?: Chapter & { char_count?: number };
-  }>(
-    `${BASE}/api/reader/get`,
-    {
-      method: "POST",
-      headers: apiHeaders(referer),
-      body: JSON.stringify(
-        chapterId
-          ? { translate: "ai", language: "en", chapter_id: chapterId, raw_id: rawId }
-          : { translate: "ai", language: "en", raw_id: rawId, chapter_no: order },
-      ),
-    },
-    25000,
+  };
+  const reader = await step("reader/get", () =>
+    fetchJson<ReaderReply>(
+      `${BASE}/api/reader/get`,
+      {
+        method: "POST",
+        headers: apiHeaders(referer),
+        body: JSON.stringify(
+          chapterId
+            ? { translate: "ai", language: "en", chapter_id: chapterId, raw_id: rawId }
+            : { translate: "ai", language: "en", raw_id: rawId, chapter_no: order },
+        ),
+      },
+      25000,
+    ),
   );
 
   if (!reader?.success) {
@@ -296,10 +313,12 @@ async function chapterContent(rawId: number, slug: string, order: number) {
   }
   if (!reader.content_url) throw new HttpError(502, `Isi chapter ${order} belum tersedia di WTR-LAB.`);
 
-  const payload = await fetchJson<{ data?: { data?: { body?: unknown; glossary_data?: { terms?: unknown } } } }>(
-    /^https?:\/\//i.test(reader.content_url) ? reader.content_url : `${BASE}${reader.content_url}`,
-    { headers: apiHeaders(referer) },
-    25000,
+  const payload = await step("content", () =>
+    fetchJson<{ data?: { data?: { body?: unknown; glossary_data?: { terms?: unknown } } } }>(
+      /^https?:\/\//i.test(reader.content_url!) ? reader.content_url! : `${BASE}${reader.content_url}`,
+      { headers: apiHeaders(referer) },
+      25000,
+    ),
   );
   const inner = payload?.data?.data ?? {};
   const terms = (inner.glossary_data?.terms ?? []) as unknown[];

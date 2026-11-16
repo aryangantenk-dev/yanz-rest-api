@@ -581,13 +581,22 @@ async function chapterContent(rawId: number, slug: string, order: number) {
   }
 
   let rendered: Rendered | null = null;
+  let renderNote = "";
   // Perender kadang mengevaluasi halaman sebelum isinya terhidrasi: ulangi beberapa kali.
   for (let attempt = 0; attempt < 3 && !rendered; attempt++) {
     if (attempt) await new Promise((r) => setTimeout(r, 1500 * attempt));
-    const candidate = await chapterViaRender(referer, order).catch(() => null);
+    const candidate = await chapterViaRender(referer, order).catch((e: unknown) => {
+      renderNote = e instanceof HttpError ? `${e.status}: ${e.message}` : String(e);
+      return null;
+    });
     if (candidate && candidate.paragraphs.length >= 3) rendered = candidate;
   }
-  if (!rendered) throw firstError;
+  if (!rendered) {
+    if (firstError instanceof HttpError && firstError.status >= 500 && renderNote) {
+      throw new HttpError(firstError.status, `${firstError.message} [render: ${renderNote}]`);
+    }
+    throw firstError;
+  }
 
   return {
     raw_id: rawId,

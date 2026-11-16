@@ -101,6 +101,13 @@ export const categories: Category[] = [
     seoTitle: "REST API Anime: Scraper Animekuindo, Link Player & Embed",
   },
   {
+    id: "donghua",
+    name: "Donghua",
+    tagline: "Scraper Anichin",
+    description: "Scraper anichin.ro: beranda, episode terbaru, donghua populer, jelajah genre/musim/studio, jadwal rilis mingguan, metadata lengkap seri, link player tiap episode, dan proxy gambar.",
+    seoTitle: "REST API Donghua: Scraper Anichin, Jadwal Rilis, Link Player Embed",
+  },
+  {
     id: "film",
     name: "Film",
     tagline: "Film & serial dari Animekuy",

@@ -13,6 +13,7 @@ export type CategoryId =
   | "downloader"
   | "games"
   | "film"
+  | "donghua"
   | "jkt48";
 
 export type Param = {

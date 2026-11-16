@@ -91,8 +91,9 @@ function card($: CheerioAPI, el: El): Card | null {
   const seriesRef = classify(seriesLink.attr("href"));
   if (seriesRef?.kind === "series") {
     const latestRef = classify(el.find('.tt a[href]:not([href*="/anime/"])').last().attr("href"));
+    // Di daftar seri, nama seri ada di teks .tt dan <h2> berisi judul episode terbarunya.
     return {
-      title: h2 || ttRest || clean(seriesLink.attr("title")) || seriesRef.slug,
+      title: ttRest || h2 || clean(seriesLink.attr("title")) || seriesRef.slug,
       kind: "series",
       slug: seriesRef.slug,
       url: seriesRef.url,
@@ -101,7 +102,7 @@ function card($: CheerioAPI, el: El): Card | null {
       type: clean(el.find(".typez").first().text()) || null,
       episode: clean(el.find(".epx").first().text()) || null,
       sub: clean(el.find(".sb").first().text()) || null,
-      episode_title: null,
+      episode_title: h2 && h2 !== ttRest ? h2 : null,
       latest_episode: latestRef?.kind === "episode" ? { title: h2 || latestRef.slug, slug: latestRef.slug, url: latestRef.url } : null,
     };
   }

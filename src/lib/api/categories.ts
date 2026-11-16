@@ -108,6 +108,13 @@ export const categories: Category[] = [
     seoTitle: "REST API Donghua: Scraper Anichin, Jadwal Rilis, Link Player Embed",
   },
   {
+    id: "novel",
+    name: "Novel",
+    tagline: "Scraper WTR-LAB",
+    description: "Scraper wtr-lab.com: novel terjemahan terbaru, peringkat harian/mingguan/bulanan, pencarian, jelajah genre, metadata lengkap seri, isi chapter, dan proxy sampul.",
+    seoTitle: "REST API Novel: Scraper WTR-LAB, Chapter Teks & Peringkat",
+  },
+  {
     id: "film",
     name: "Film",
     tagline: "Film & serial dari Animekuy",

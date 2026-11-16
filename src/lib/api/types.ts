@@ -14,6 +14,7 @@ export type CategoryId =
   | "games"
   | "film"
   | "donghua"
+  | "novel"
   | "jkt48";
 
 export type Param = {

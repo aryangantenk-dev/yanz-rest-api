@@ -10,6 +10,7 @@ import { komikEndpoints } from "./komik";
 import { animeEndpoints } from "./anime";
 import { filmEndpoints } from "./film";
 import { donghuaEndpoints } from "./donghua";
+import { novelEndpoints } from "./novel";
 import { canvasEndpoints } from "./canvas";
 import { searchEndpoints } from "./search";
 import { downloaderEndpoints } from "./downloader";
@@ -38,6 +39,7 @@ export const endpoints: Endpoint[] = [
   ...animeEndpoints,
   ...filmEndpoints,
   ...donghuaEndpoints,
+  ...novelEndpoints,
   ...jkt48Endpoints,
   // Kategorinya beragam; urutan per kategori diatur ulang oleh allMeta().
   ...mediaToolEndpoints,

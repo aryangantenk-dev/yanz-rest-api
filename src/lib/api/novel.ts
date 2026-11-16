@@ -484,81 +484,70 @@ async function chapterViaApi(rawId: number, slug: string, order: number) {
 }
 
 /*
-  Jalan terakhir: pembaca pihak ketiga yang menjalankan JavaScript (r.jina.ai). Cloudflare
-  WTR-LAB memblokir IP data center (Vercel, Supabase) pada /api/reader/get, sementara halaman
-  chapter tetap bisa dibaca lewat perender ini. Dipakai hanya bila semua jalur API gagal.
+  Jalan terakhir: perender pihak ketiga yang menjalankan JavaScript di browser sungguhan
+  (api.microlink.io). Cloudflare WTR-LAB memblokir IP data center (Vercel, Supabase) pada
+  /api/reader/get, sementara halaman chapter tetap terbaca di browser perender. Dipakai hanya
+  bila semua jalur API gagal.
 */
-const READER_RENDER = "https://r.jina.ai/";
+const RENDER_API = "https://api.microlink.io/";
+const RENDER_SELECTOR = ".chapter-body";
 
 /** Baris antarmuka WTR-LAB yang tidak boleh dianggap isi chapter. */
 const BOILERPLATE =
-  /^(#\d+\s*)?(ad blocker detected|problematic ad|you can disable popup ads|guests can preview|sign up for free|or click here to read|please disable your ad blocker|report it here)\b/i;
+  /^(#\d+\s*)?(ad blocker detected|problematic ad|you can disable popup ads|guests can preview|sign up for free|or click here to read|please disable your ad blocker|report it here|wt r-lab|library novels ranking leaderboard)\b/i;
 
 type Rendered = { title: string | null; paragraphs: string[]; declared: number | null };
 
-/** Bersihkan markdown hasil perender menjadi paragraf teks. */
+/** Pecah teks halaman hasil perender menjadi paragraf bersih. */
 function renderParagraphs(text: string): Rendered {
-  const start = text.indexOf("Markdown Content:");
-  const body = start >= 0 ? text.slice(start + "Markdown Content:".length) : text;
   let title: string | null = null;
   let declared: number | null = null;
   const paragraphs: string[] = [];
-  for (const raw of body.split("\n")) {
-    let line = raw.trim();
+  for (const raw of text.split("\n")) {
+    let line = raw.replace(/\s+/g, " ").trim();
     if (!line) continue;
     if (/^(title|url source|final url|published time|warning|markdown content):/i.test(line)) continue;
-    if (/^\*\*[^*]{1,160}\*\*$/.test(line) && !title) {
-      const only = line.replace(/\*\*/g, "").trim();
-      // Baris tebal di awal biasanya judul chapter; kalau terlalu panjang, itu paragraf.
-      if (only.length <= 120) {
-        title = tidy(only);
-        continue;
-      }
-    }
-    if (/^!\[/.test(line) || /adform|monetixads|prebid|doubleclick|googlesyndication/i.test(line)) continue;
+    if (/adform|monetixads|prebid|doubleclick|googlesyndication|1x1 image/i.test(line)) continue;
     // Teks antarmuka situs (peringatan pengunci, pengingat adblock) bukan isi chapter.
     if (BOILERPLATE.test(line)) continue;
-    line = line
-      .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-      .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-      .replace(/\*\*/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    // Penanda nomor chapter dari halaman (mis. "#4 Chapter 4 ...") dipakai untuk memastikan
-    // isi yang diterima memang chapter yang diminta.
-    const mark = line.match(/^#(\d+)\s*Chapter\b/i);
+    // Halaman menyertakan penanda nomor chapter (mis. "#3"); dipakai memastikan isi cocok.
+    const mark = line.match(/^#(\d{1,6})$/);
     if (mark) {
-      declared = Number(mark[1]);
-      line = line.replace(/^#\d+\s*/i, "");
+      if (declared === null) declared = Number(mark[1]);
+      continue;
     }
+    const head = line.match(/^Chapter\s+(\d{1,6})\b/i);
+    if (head && title === null) title = tidy(line);
+    if (/^(ch\.|ch\s)\d+\s*\/\s*\d+/i.test(line) || /%$/.test(line)) continue;
+    if (line.length < 2) continue;
     if (line) paragraphs.push(tidy(line));
   }
   return { title, paragraphs, declared };
 }
 
-/** Perender kadang mengembalikan snapshot iklan; ulangi tanpa cache sebelum menyerah. */
+/**
+ * Ambil isi chapter lewat perender browser. Perender mengembalikan teks lengkap `.chapter-body`
+ * (yang juga memuat judul chapter di baris pertamanya).
+ */
 async function chapterViaRender(url: string, order: number): Promise<Rendered> {
-  const ua = browserHeaders(REFERER)["user-agent"];
-  let last: Rendered | null = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt) await new Promise((r) => setTimeout(r, 1500 * attempt));
-    // Percobaan berikutnya memakai penanda unik supaya perender tidak memakai snapshot lama.
-    const target = attempt ? `${url}${url.includes("?") ? "&" : "?"}cb=${Date.now()}${attempt}` : url;
-    const res = await fetch(`${READER_RENDER}${target}`, {
-      headers: { "user-agent": ua, accept: "text/plain", "x-no-cache": "true", "x-retain-images": "none" },
-      cache: "no-store",
-      signal: AbortSignal.timeout(50000),
-    }).catch(() => null);
-    if (!res?.ok) continue;
-    const parsed = renderParagraphs(await res.text().catch(() => ""));
-    last = parsed;
-    if (parsed.paragraphs.length < 3) continue;
-    // Nomor chapter yang tertulis di halaman harus cocok; kalau tidak, snapshot-nya basi.
-    if (parsed.declared !== null && parsed.declared !== order) continue;
-    return parsed;
+  const qs = new URLSearchParams({ url, meta: "false" });
+  qs.set("data.body.evaluate", `document.querySelector(${JSON.stringify(RENDER_SELECTOR)})?.innerText || ""`);
+  const res = await fetch(`${RENDER_API}?${qs}`, {
+    headers: { accept: "application/json" },
+    cache: "no-store",
+    signal: AbortSignal.timeout(60000),
+  }).catch(() => null);
+  if (!res?.ok) throw new HttpError(502, "Pembaca cadangan tidak merespons.");
+  const payload = (await res.json().catch(() => null)) as { data?: { body?: unknown } } | null;
+  const text = typeof payload?.data?.body === "string" ? payload.data.body : "";
+  if (!text.trim()) throw new HttpError(502, "Pembaca cadangan tidak menemukan isi chapter.");
+
+  const parsed = renderParagraphs(text);
+  // Nomor chapter di halaman harus cocok; kalau tidak, perender menyajikan halaman lain.
+  if (parsed.declared !== null && parsed.declared !== order) {
+    throw new HttpError(502, `Pembaca cadangan menyajikan chapter ${parsed.declared}, bukan ${order}.`);
   }
-  if (last) return last;
-  throw new HttpError(502, "Pembaca cadangan tidak merespons.");
+  return parsed;
 }
 
 /** Isi satu chapter: API situs lebih dulu, perender pihak ketiga bila diblokir. */

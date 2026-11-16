@@ -612,8 +612,9 @@ export const donghuaEndpoints: Endpoint[] = [
     params: [],
     handler: async () => {
       const { $ } = await fetchPage(`${BASE}/schedule`, REFERER);
-      const days: { day: string; total: number; items: { title: string; slug: string; url: string; poster: string | null; episode: string | null; state: string | null }[] }[] = [];
-      let current: (typeof days)[number] | null = null;
+      type DayItem = { title: string; slug: string; url: string; poster: string | null; episode: string | null; time: string | null; state: string | null };
+      const days: { day: string; total: number; items: DayItem[] }[] = [];
+      let current: { day: string; total: number; items: DayItem[] } | null = null;
       $("h3, h4, .schedulepage .bs, .bixbox .bs, .schedule .bs").each((_, node) => {
         const el = $(node);
         if (/^h[34]$/i.test(node.tagName ?? "")) {
@@ -623,19 +624,30 @@ export const donghuaEndpoints: Endpoint[] = [
           days.push(current);
           return;
         }
+        const day = current as { day: string; total: number; items: DayItem[] } | null;
         const a = el.find('a[href*="/anime/"]').first();
         const slug = pathParts(a.attr("href"), BASE).pop();
-        if (!slug || !current) return;
-        const label = clean(el.find(".limit, .typez, .epx, span").first().text());
-        current.items.push({
-          title: clean(el.find(".tt h2, .tt").first().text()) || clean(a.attr("title")) || slug,
+        if (!slug || !day) return;
+        // .limit berisi "Released 167" (sudah tayang) atau jam rilis "04:35 168" (belum tayang).
+        const parts = el
+          .find(".limit > *")
+          .map((_, c) => clean($(c).text()))
+          .get()
+          .filter(Boolean);
+        const label = parts.length >= 2 ? parts.join(" ") : clean(el.find(".limit").first().text());
+        const released = /released/i.test(label);
+        const time = released ? null : label.match(/\b(\d{1,2}:\d{2})\b/)?.[1] ?? null;
+        const number = label.replace(/released/i, "").match(/(\d{1,4})\s*$/)?.[1] ?? null;
+        day.items.push({
+          title: clean(el.find(".tt h2, .tt, .ntitle").first().text()) || clean(a.attr("title")) || slug,
           slug,
           url: seriesUrl(slug),
           poster: imgSrc(el.find("img").first(), BASE),
-          episode: label.match(/Ep\s*([\d.]+)/i)?.[1] ?? null,
-          state: /released/i.test(label) ? "released" : label || null,
+          episode: number,
+          time,
+          state: released ? "released" : "upcoming",
         });
-        current.total = current.items.length;
+        day.total = day.items.length;
       });
       const filtered = days.filter((d) => d.items.length);
       if (!filtered.length) throw new HttpError(502, "Jadwal Anichin tidak terbaca.");

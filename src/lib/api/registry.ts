@@ -45,7 +45,13 @@ export const endpoints: Endpoint[] = [
   ...workerEndpoints,
 ];
 
-const index = new Map(endpoints.map((e) => [`${e.category}/${e.slug}`, e]));
+const index = new Map<string, Endpoint>();
+// Endpoint worker didaftarkan lebih dulu, jadi bila slug-nya sama dengan versi mandiri
+// (mis. tools/ssweb), yang dipakai adalah versi worker.
+for (const e of [...workerEndpoints, ...endpoints]) {
+  const key = `${e.category}/${e.slug}`;
+  if (!index.has(key)) index.set(key, e);
+}
 
 export function findEndpoint(key: string): Endpoint | undefined {
   return index.get(key);

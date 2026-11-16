@@ -148,6 +148,13 @@ const SHOT_DEVICES: Record<string, [number, number]> = {
   tablet: [820, 1180],
   mobile: [390, 844],
 };
+/** Perangkat untuk tools/ssweb: nama, lebar, tinggi. Desktop di sini 1366x768 seperti versi awal. */
+const SSWEB_DEVICES: Record<string, [number, number]> = {
+  desktop: [1366, 768],
+  laptop: [1366, 768],
+  tablet: [820, 1180],
+  mobile: [390, 844],
+};
 const SHOT_ALIAS: Record<string, string> = {
   pc: "desktop", komputer: "desktop", hp: "mobile", ponsel: "mobile", phone: "mobile", android: "mobile", iphone: "mobile", ipad: "tablet", tab: "tablet",
 };
@@ -172,6 +179,53 @@ export const toolsEndpoints: Endpoint[] = [
         color: { dark: normalizeHex(opt(sp, "dark"), "#111111"), light: normalizeHex(opt(sp, "light"), "#ffffff") },
       });
       return binaryResponse(buf, "image/png");
+    },
+  },
+  {
+    category: "tools", slug: "ssweb", kind: "image",
+    title: "Screenshot Website v2",
+    description: "Tangkapan layar halaman web lewat layanan gambar di server lain, tanpa perlu browser sendiri. Bisa satu halaman penuh dari atas sampai bawah, mode gelap, dan jeda tunggu untuk halaman yang lambat. Hasilnya langsung berupa gambar.",
+    params: [
+      { name: "url", required: true, description: "Alamat halaman web.", example: "https://nextjs.org" },
+      { name: "device", description: "Perangkat: desktop (1366x768), tablet (820x1180), atau mobile (390x844). Default desktop.", example: "desktop", options: ["desktop", "laptop", "tablet", "mobile"] },
+      { name: "full", description: "Isi 1 untuk memotret seluruh halaman dari atas sampai bawah.", example: "1", options: ["0", "1"] },
+      { name: "dark", description: "Isi 1 untuk mode gelap, bila situsnya mendukung.", example: "0", options: ["0", "1"] },
+      { name: "format", description: "png atau jpg. Default png.", example: "png", options: ["png", "jpg"] },
+      { name: "wait", description: "Jeda tambahan sebelum dipotret, 0 sampai 10 detik. Default 0.", example: "0" },
+    ],
+    handler: async ({ sp }) => {
+      const u = parseHttpUrl(need(sp, "url", 2000)).toString();
+      const raw = opt(sp, "device").toLowerCase().replace(/[^a-z]/g, "");
+      const name = SHOT_ALIAS[raw] ?? (raw || "desktop");
+      const dev = SSWEB_DEVICES[name];
+      if (!dev) throw new HttpError(400, `Parameter 'device' tidak dikenal. Pilihan: ${Object.keys(SSWEB_DEVICES).join(", ")}.`);
+      const [vw, vh] = dev;
+      const full = opt(sp, "full") === "1" || opt(sp, "full") === "true";
+      const dark = opt(sp, "dark") === "1" || opt(sp, "dark") === "true";
+      const format = opt(sp, "format").toLowerCase() === "jpg" ? "jpg" : "png";
+      const wait = Math.round(num(sp, "wait", 0, 0, 10));
+
+      // thum.io: /get/<opsi>/<url>. `fullpage` memotret seluruh tinggi halaman.
+      const parts = [`width/${vw}`, `viewportWidth/${vw}`, `crop/${full ? vh * 6 : vh}`, "noanimate"];
+      if (full) parts.unshift("fullpage");
+      if (dark) parts.push("darkmode");
+      if (wait > 0) parts.push(`wait/${wait}`);
+      if (format === "jpg") parts.push("jpg");
+      const url = `https://image.thum.io/get/${parts.join("/")}/${u}`;
+
+      let res;
+      try {
+        res = await fetchRaw(url, undefined, 45000);
+      } catch {
+        throw new HttpError(502, "Layanan tangkapan layar tidak dapat dihubungi. Coba lagi sebentar lagi.");
+      }
+      const buf = await res.arrayBuffer();
+      const type = res.headers.get("content-type") ?? "";
+      // thum.io menjawab PNG bila berhasil; jawaban lain berarti halamannya yang bermasalah.
+      if (!type.startsWith("image/") || buf.byteLength < 1024) {
+        throw new HttpError(502, "Halaman itu tidak bisa dipotret. Pastikan alamatnya bisa dibuka umum dan tidak memblokir bot.");
+      }
+      return binaryResponse(buf, type, "public, max-age=600");
     },
   },
   {

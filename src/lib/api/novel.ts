@@ -3,6 +3,7 @@ import { HttpError } from "./types";
 import { load } from "cheerio";
 import { fetchJson, need, num, opt } from "./helpers";
 import { browserHeaders, clean } from "./scrape";
+import { proxyConfigured, viaProxy } from "./edgeproxy";
 
 /*
   Sumber: https://wtr-lab.com (novel terjemahan Inggris, Next.js).
@@ -288,6 +289,17 @@ const READER_VARIANTS: { name: string; headers: (referer: string) => Record<stri
   },
 ];
 
+/** Ambil JSON lewat server perantara (edgeproxy) bila situs sumber menolak IP server. */
+async function proxyJson<T>(url: string, opts: Parameters<typeof viaProxy>[1]): Promise<T | null> {
+  const relay = await viaProxy(url, { label: "Server perantara", accept: "application/json", ...opts });
+  if (relay.status < 200 || relay.status >= 300) return null;
+  try {
+    return JSON.parse(relay.text) as T;
+  } catch {
+    return null;
+  }
+}
+
 async function readerGet(referer: string, body: unknown): Promise<ReaderReply> {
   const notes: string[] = [];
   for (const variant of READER_VARIANTS) {
@@ -304,6 +316,18 @@ async function readerGet(referer: string, body: unknown): Promise<ReaderReply> {
       // Galat 4xx selain 403 berarti permintaannya sampai ke aplikasi (mis. chapter terkunci).
       if (e.status < 500 && e.status !== 403) throw e;
     }
+  }
+  // Vercel diblokir Cloudflare; server perantara (Supabase Edge Function) dipakai sebagai jalan lain.
+  if (proxyConfigured()) {
+    const relay = await proxyJson(`${BASE}/api/reader/get`, {
+      referer,
+      origin: true,
+      xhr: true,
+      body: JSON.stringify(body),
+      timeoutMs: 30000,
+    }).catch(() => null);
+    if (relay) return relay;
+    notes.push("perantara: ditolak");
   }
   throw new HttpError(
     502,
@@ -353,13 +377,17 @@ async function chapterContent(rawId: number, slug: string, order: number) {
   }
   if (!reader.content_url) throw new HttpError(502, `Isi chapter ${order} belum tersedia di WTR-LAB.`);
 
-  const payload = await step("content", () =>
-    fetchJson<{ data?: { data?: { body?: unknown; glossary_data?: { terms?: unknown } } } }>(
-      /^https?:\/\//i.test(reader.content_url!) ? reader.content_url! : `${BASE}${reader.content_url}`,
-      { headers: apiHeaders(referer) },
-      25000,
-    ),
-  );
+  type ContentReply = { data?: { data?: { body?: unknown; glossary_data?: { terms?: unknown } } } };
+  const contentUrl = /^https?:\/\//i.test(reader.content_url) ? reader.content_url : `${BASE}${reader.content_url}`;
+  const payload = await step("content", async (): Promise<ContentReply> => {
+    const direct = await fetchJson<ContentReply>(contentUrl, { headers: apiHeaders(referer) }, 25000).catch(() => null);
+    if (direct?.data) return direct;
+    if (proxyConfigured()) {
+      const relay = await proxyJson<ContentReply>(contentUrl, { referer, origin: true, xhr: true, timeoutMs: 30000 }).catch(() => null);
+      if (relay?.data) return relay;
+    }
+    throw new HttpError(502, "Server sumber tidak mengirim isi chapter (diblokir atau sedang sibuk). Coba chapter lain atau ulangi nanti.");
+  });
   const inner = payload?.data?.data ?? {};
   const terms = (inner.glossary_data?.terms ?? []) as unknown[];
   const body = Array.isArray(inner.body) ? inner.body : [];

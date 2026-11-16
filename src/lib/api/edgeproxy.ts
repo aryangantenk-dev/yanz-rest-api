@@ -8,6 +8,8 @@ import { HttpError } from "./types";
  */
 export type ProxyOpts = {
   accept?: string;
+  /** Kirim sebagai POST dengan isi ini (JSON mentah). Tanpa ini permintaan tetap GET. */
+  body?: string;
   referer?: string;
   origin?: boolean;
   xhr?: boolean;
@@ -34,6 +36,7 @@ export async function viaProxy(url: string, opts: ProxyOpts = {}): Promise<Proxy
 
   const qs = new URLSearchParams({ url });
   if (opts.accept) qs.set("accept", opts.accept);
+  if (opts.body) qs.set("body", opts.body);
   if (opts.referer) qs.set("referer", opts.referer);
   if (opts.origin) qs.set("origin", "1");
   if (opts.xhr) qs.set("xhr", "1");
@@ -42,7 +45,9 @@ export async function viaProxy(url: string, opts: ProxyOpts = {}): Promise<Proxy
   let res: Response;
   try {
     res = await fetch(`${base}/fetch?${qs}`, {
+      method: opts.body ? "POST" : "GET",
       headers: { "x-proxy-key": key },
+      ...(opts.body ? { body: opts.body } : {}),
       cache: "no-store",
       signal: AbortSignal.timeout(opts.timeoutMs ?? 28000),
     });

@@ -560,6 +560,39 @@ async function chapterViaRender(url: string, order: number): Promise<Rendered> {
   return { ...parsed, title: official || parsed.title, declared: order };
 }
 
+/**
+ * Perender kedua (r.jina.ai) dipakai bila perender browser tidak menemukan isi. Hasilnya markdown,
+ * jadi dibersihkan dulu; nomor chapter di halaman dipakai untuk memastikan tidak tertukar.
+ */
+async function chapterViaJina(url: string, order: number): Promise<Rendered> {
+  const res = await fetch(`https://r.jina.ai/${url}`, {
+    headers: { accept: "text/plain", "x-retain-images": "none" },
+    cache: "no-store",
+    signal: AbortSignal.timeout(55000),
+  }).catch(() => null);
+  if (!res?.ok) throw new HttpError(502, "Perender markdown tidak merespons.");
+  const text = await res.text().catch(() => "");
+  const start = text.indexOf("Markdown Content:");
+  const body = start >= 0 ? text.slice(start + "Markdown Content:".length) : text;
+  const lines: string[] = [];
+  for (const raw of body.split("\n")) {
+    const line = raw.replace(/\s+/g, " ").trim();
+    if (!line) continue;
+    if (/^(title|url source|final url|published time|warning|markdown content):/i.test(line)) continue;
+    if (/1x1 image|adform|monetixads|prebid|doubleclick/i.test(line)) continue;
+    if (BOILERPLATE.test(line)) continue;
+    const mark = line.match(/^#(\d{1,6})\s*Chapter\b/i);
+    if (mark) continue;
+    if (/^\*\*[^*]{1,160}\*\*$/.test(line)) continue;
+    if (/^(ch\.|ch\s)\d+\s*\/\s*\d+/i.test(line)) continue;
+    const clean_ = line.replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/\*\*/g, "").trim();
+    if (clean_ && clean_.length > 1) lines.push(tidy(clean_));
+  }
+  // Halaman kosong/kerangka aplikasi (bukan isi) juga terdeteksi dari jumlah baris teks.
+  if (lines.length < 3) throw new HttpError(502, "Perender markdown tidak menemukan isi chapter.");
+  return { title: null, paragraphs: lines, declared: order };
+}
+
 /** Isi satu chapter: API situs lebih dulu, perender pihak ketiga bila diblokir. */
 async function chapterContent(rawId: number, slug: string, order: number) {
   const referer = chapterUrl(rawId, slug, order);
@@ -591,6 +624,11 @@ async function chapterContent(rawId: number, slug: string, order: number) {
       return null;
     });
     if (candidate && candidate.paragraphs.length >= 3) rendered = candidate;
+    if (!rendered) {
+      // Perender kedua dengan mesin berbeda; peluang berhasilnya tidak bergantung pada yang pertama.
+      const jinaUrl = attempt ? `${referer}${referer.includes("?") ? "&" : "?"}cb=${Date.now()}` : referer;
+      rendered = await chapterViaJina(jinaUrl, order).catch(() => null);
+    }
   }
   if (!rendered) {
     if (renderNote) console.warn(`[novel] perender gagal: ${renderNote}`);

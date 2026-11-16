@@ -517,7 +517,10 @@ function renderParagraphs(text: string): Rendered {
       continue;
     }
     const head = line.match(/^Chapter\s+(\d{1,6})\b/i);
-    if (head && title === null) title = tidy(line);
+    if (head) {
+      if (declared === null) declared = Number(head[1]);
+      if (title === null) title = tidy(line);
+    }
     if (/^(ch\.|ch\s)\d+\s*\/\s*\d+/i.test(line) || /%$/.test(line)) continue;
     if (line.length < 2) continue;
     if (line) paragraphs.push(tidy(line));
@@ -550,6 +553,21 @@ async function chapterViaRender(url: string, order: number): Promise<Rendered> {
   return parsed;
 }
 
+/**
+ * Perender kadang menyajikan halaman chapter lain (cache/CDN-nya sendiri), sehingga nomor di
+ * judul saja tidak cukup. Kata yang khas dari judul chapter dicocokkan dengan isi bab yang
+ * benar-benar tersaji; ulangi permintaan sekali dengan penanda unik bila tidak cocok.
+ */
+function contentMatches(text: string, title: string | null): boolean {
+  if (!title) return true;
+  const bare = title.replace(/^chapter\s*\d+\s*[:.\-]?\s*/i, "").replace(/\s*[:(].*$/, "").trim();
+  const words = bare.toLowerCase().split(/[^a-z']+/).filter((w) => w.length >= 5);
+  if (!words.length) return true;
+  const hay = text.toLowerCase().replace(/\s+/g, " ");
+  const hits = words.filter((w) => hay.includes(w)).length;
+  return hits / words.length >= 0.6;
+}
+
 /** Isi satu chapter: API situs lebih dulu, perender pihak ketiga bila diblokir. */
 async function chapterContent(rawId: number, slug: string, order: number) {
   const referer = chapterUrl(rawId, slug, order);
@@ -571,7 +589,13 @@ async function chapterContent(rawId: number, slug: string, order: number) {
     if (e instanceof HttpError && (e.status === 404 || e.status === 403)) throw e;
   }
 
-  const rendered = await chapterViaRender(referer, order).catch(() => null);
+  let rendered: Rendered | null = null;
+  for (let attempt = 0; attempt < 2 && !rendered; attempt++) {
+    const candidate = await chapterViaRender(attempt ? `${referer}?cb=${Date.now()}` : referer, order).catch(() => null);
+    if (candidate && candidate.paragraphs.length >= 3 && contentMatches(candidate.paragraphs.join(" "), tidy(meta?.title))) {
+      rendered = candidate;
+    }
+  }
   if (!rendered || rendered.paragraphs.length < 3) throw firstError;
 
   return {

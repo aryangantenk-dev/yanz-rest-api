@@ -402,8 +402,8 @@ async function findChapterId(rawId: number, order: number): Promise<number | nul
   return hit?.id ?? null;
 }
 
-/** Isi satu chapter: reader/get → content_url → paragraf. */
-async function chapterContent(rawId: number, slug: string, order: number) {
+/** Isi satu chapter lewat API situs: reader/get → content_url → paragraf. */
+async function chapterViaApi(rawId: number, slug: string, order: number) {
   const referer = chapterUrl(rawId, slug, order);
   // Pastikan cookie Cloudflare terisi (GET halaman chapter) sebelum memanggil API baca.
   if (!jarCookie()) await html(`/en/novel/${rawId}/${slug || "novel"}/chapter-${order}`).catch(() => "");
@@ -470,6 +470,88 @@ async function chapterContent(rawId: number, slug: string, order: number) {
       next: chapterUrl(rawId, slug, order + 1),
     },
     content: paragraphs.join("\n\n"),
+  };
+}
+
+/*
+  Jalan terakhir: pembaca pihak ketiga yang menjalankan JavaScript (r.jina.ai). Cloudflare
+  WTR-LAB memblokir IP data center (Vercel, Supabase) pada /api/reader/get, sementara halaman
+  chapter tetap bisa dibaca lewat perender ini. Dipakai hanya bila semua jalur API gagal.
+*/
+const READER_RENDER = "https://r.jina.ai/";
+
+type Rendered = { title: string | null; paragraphs: string[] };
+
+/** Bersihkan markdown hasil perender menjadi paragraf teks. */
+function renderParagraphs(text: string): Rendered {
+  const start = text.indexOf("Markdown Content:");
+  const body = start >= 0 ? text.slice(start + "Markdown Content:".length) : text;
+  let title: string | null = null;
+  const paragraphs: string[] = [];
+  for (const raw of body.split("\n")) {
+    let line = raw.trim();
+    if (!line) continue;
+    if (/^(title|url source|final url|published time|warning|markdown content):/i.test(line)) continue;
+    if (/^\*\*[^*]{1,160}\*\*$/.test(line) && !title) {
+      const only = line.replace(/\*\*/g, "").trim();
+      // Baris tebal di awal biasanya judul chapter; kalau terlalu panjang, itu paragraf.
+      if (only.length <= 120) {
+        title = tidy(only);
+        continue;
+      }
+    }
+    if (/^!\[/.test(line) || /adform|monetixads|prebid|doubleclick|googlesyndication/i.test(line)) continue;
+    line = line
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/\*\*/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (line) paragraphs.push(tidy(line));
+  }
+  return { title, paragraphs };
+}
+
+async function chapterViaRender(url: string): Promise<Rendered> {
+  const res = await fetch(`${READER_RENDER}${url}`, {
+    headers: { "user-agent": browserHeaders(REFERER)["user-agent"], accept: "text/plain" },
+    cache: "no-store",
+    signal: AbortSignal.timeout(50000),
+  });
+  if (!res.ok) throw new HttpError(502, `Pembaca cadangan merespons dengan status ${res.status}.`);
+  return renderParagraphs(await res.text());
+}
+
+/** Isi satu chapter: API situs lebih dulu, perender pihak ketiga bila diblokir. */
+async function chapterContent(rawId: number, slug: string, order: number) {
+  const referer = chapterUrl(rawId, slug, order);
+  let firstError: unknown = null;
+  try {
+    return await chapterViaApi(rawId, slug, order);
+  } catch (e) {
+    firstError = e;
+    // Chapter terkunci/404 bukan soal blokir: jangan cari jalan lain.
+    if (e instanceof HttpError && (e.status === 404 || e.status === 403)) throw e;
+  }
+
+  const rendered = await chapterViaRender(referer).catch(() => null);
+  if (!rendered || rendered.paragraphs.length < 3) throw firstError;
+
+  return {
+    raw_id: rawId,
+    slug,
+    chapter: order,
+    chapter_id: null,
+    title: rendered.title || `Chapter ${order}`,
+    url: referer,
+    characters: rendered.paragraphs.join(" ").length,
+    paragraphs: rendered.paragraphs.length,
+    navigation: {
+      prev: order > 1 ? chapterUrl(rawId, slug, order - 1) : null,
+      next: chapterUrl(rawId, slug, order + 1),
+    },
+    source: "render",
+    content: rendered.paragraphs.join("\n\n"),
   };
 }
 

@@ -385,7 +385,18 @@ async def browser():
 
         if _playwright is None:
             _playwright = await async_playwright().start()
-        opts = {"args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--hide-scrollbars", "--mute-audio"]}
+        # Sebagian mesin cloud (VPS NAT/LXC) punya variabel proxy di lingkungan root yang tidak
+        # valid; Chromium lalu mengira tidak ada jaringan (ERR_INTERNET_DISCONNECTED). Proxy
+        # dibuang dari lingkungan proses dan pemakaian proxy dimatikan.
+        clean_env = {k: v for k, v in os.environ.items() if "proxy" not in k.lower()}
+        opts = {
+            "args": [
+                "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
+                "--hide-scrollbars", "--mute-audio", "--no-proxy-server", "--disable-background-networking",
+                "--disable-features=NetworkServiceSandbox", "--dns-prefetch-disable", "--no-first-run",
+            ],
+            "env": clean_env,
+        }
         sys_bin = CHROMIUM or shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
         has_bundled = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")).is_dir() and any(Path(os.environ["PLAYWRIGHT_BROWSERS_PATH"]).glob("chromium*"))
         if CHROMIUM:

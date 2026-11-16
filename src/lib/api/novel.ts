@@ -392,6 +392,15 @@ async function step<T>(label: string, run: () => Promise<T>): Promise<T> {
 }
 
 /** Id chapter (bukan nomor urut) yang dipakai klien WTR-LAB saat memanggil /api/reader/get. */
+async function findChapter(rawId: number, order: number): Promise<Chapter | null> {
+  const res = await fetchJson<{ chapters?: Chapter[] }>(
+    `${BASE}/api/chapters/${rawId}?start=${order}&end=${order}`,
+    { headers: apiHeaders(REFERER) },
+    20000,
+  ).catch(() => null);
+  return (Array.isArray(res?.chapters) ? res.chapters.find((c) => c.order === order) : null) ?? null;
+}
+
 async function findChapterId(rawId: number, order: number): Promise<number | null> {
   const res = await fetchJson<{ chapters?: Chapter[] }>(
     `${BASE}/api/chapters/${rawId}?start=${order}&end=${order}`,
@@ -537,12 +546,16 @@ async function chapterContent(rawId: number, slug: string, order: number) {
   const rendered = await chapterViaRender(referer).catch(() => null);
   if (!rendered || rendered.paragraphs.length < 3) throw firstError;
 
+  // Judul resmi diambil dari daftar chapter situs; judul hasil perender hanya cadangan karena
+  // kadang memuat penomoran versi mesin penerjemah.
+  const meta = await findChapter(rawId, order).catch(() => null);
+
   return {
     raw_id: rawId,
     slug,
     chapter: order,
-    chapter_id: null,
-    title: rendered.title || `Chapter ${order}`,
+    chapter_id: meta?.id ?? null,
+    title: tidy(meta?.title) || rendered.title || `Chapter ${order}`,
     url: referer,
     characters: rendered.paragraphs.join(" ").length,
     paragraphs: rendered.paragraphs.length,

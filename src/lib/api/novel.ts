@@ -559,21 +559,6 @@ async function chapterViaRender(url: string, order: number): Promise<Rendered> {
   return { ...parsed, title: official || parsed.title, declared: order };
 }
 
-/**
- * Perender kadang menyajikan halaman chapter lain (cache/CDN-nya sendiri), sehingga nomor di
- * judul saja tidak cukup. Kata yang khas dari judul chapter dicocokkan dengan isi bab yang
- * benar-benar tersaji; ulangi permintaan sekali dengan penanda unik bila tidak cocok.
- */
-function contentMatches(text: string, title: string | null): boolean {
-  if (!title) return true;
-  const bare = title.replace(/^chapter\s*\d+\s*[:.\-]?\s*/i, "").replace(/\s*[:(].*$/, "").trim();
-  const words = bare.toLowerCase().split(/[^a-z']+/).filter((w) => w.length >= 5);
-  if (!words.length) return true;
-  const hay = text.toLowerCase().replace(/\s+/g, " ");
-  const hits = words.filter((w) => hay.includes(w)).length;
-  return hits / words.length >= 0.6;
-}
-
 /** Isi satu chapter: API situs lebih dulu, perender pihak ketiga bila diblokir. */
 async function chapterContent(rawId: number, slug: string, order: number) {
   const referer = chapterUrl(rawId, slug, order);
@@ -599,12 +584,10 @@ async function chapterContent(rawId: number, slug: string, order: number) {
   // Perender kadang mengevaluasi halaman sebelum isinya terhidrasi: ulangi beberapa kali.
   for (let attempt = 0; attempt < 3 && !rendered; attempt++) {
     if (attempt) await new Promise((r) => setTimeout(r, 1500 * attempt));
-    const candidate = await chapterViaRender(attempt ? `${referer}?cb=${Date.now()}` : referer, order).catch(() => null);
-    if (candidate && candidate.paragraphs.length >= 3 && contentMatches(candidate.paragraphs.join(" "), tidy(meta?.title))) {
-      rendered = candidate;
-    }
+    const candidate = await chapterViaRender(referer, order).catch(() => null);
+    if (candidate && candidate.paragraphs.length >= 3) rendered = candidate;
   }
-  if (!rendered || rendered.paragraphs.length < 3) throw firstError;
+  if (!rendered) throw firstError;
 
   return {
     raw_id: rawId,

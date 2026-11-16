@@ -535,22 +535,28 @@ function renderParagraphs(text: string): Rendered {
 async function chapterViaRender(url: string, order: number): Promise<Rendered> {
   const qs = new URLSearchParams({ url, meta: "false" });
   qs.set("data.body.evaluate", `document.querySelector(${JSON.stringify(RENDER_SELECTOR)})?.innerText || ""`);
+  // Nomor dan judul resmi chapter diambil dari data halaman, bukan ditebak dari teks isi.
+  qs.set("data.order.evaluate", "String(__NEXT_DATA__?.props?.pageProps?.serie?.chapter?.order ?? \"\")");
+  qs.set("data.htitle.evaluate", "__NEXT_DATA__?.props?.pageProps?.serie?.chapter?.title ?? \"\"");
   const res = await fetch(`${RENDER_API}?${qs}`, {
     headers: { accept: "application/json" },
     cache: "no-store",
     signal: AbortSignal.timeout(60000),
   }).catch(() => null);
   if (!res?.ok) throw new HttpError(502, "Pembaca cadangan tidak merespons.");
-  const payload = (await res.json().catch(() => null)) as { data?: { body?: unknown } } | null;
+  const payload = (await res.json().catch(() => null)) as { data?: { body?: unknown; order?: unknown; htitle?: unknown } } | null;
   const text = typeof payload?.data?.body === "string" ? payload.data.body : "";
   if (!text.trim()) throw new HttpError(502, "Pembaca cadangan tidak menemukan isi chapter.");
 
   const parsed = renderParagraphs(text);
-  // Nomor chapter di halaman harus cocok; kalau tidak, perender menyajikan halaman lain.
-  if (parsed.declared !== null && parsed.declared !== order) {
-    throw new HttpError(502, `Pembaca cadangan menyajikan chapter ${parsed.declared}, bukan ${order}.`);
+  const pageOrder = Number(payload?.data?.order);
+  const authoritative = Number.isFinite(pageOrder) && pageOrder > 0 ? pageOrder : parsed.declared;
+  // Halaman yang tersaji harus benar-benar chapter yang diminta.
+  if (authoritative !== null && authoritative !== order) {
+    throw new HttpError(502, `Pembaca cadangan menyajikan chapter ${authoritative}, bukan ${order}.`);
   }
-  return parsed;
+  const official = tidy(typeof payload?.data?.htitle === "string" ? payload.data.htitle : "");
+  return { ...parsed, title: official || parsed.title, declared: order };
 }
 
 /**

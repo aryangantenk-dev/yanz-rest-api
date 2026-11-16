@@ -252,6 +252,66 @@ function genreLabels(html: string, ids: unknown): string[] {
 }
 
 /**
+ * Panggil /api/reader/get dengan beberapa varian header. Cloudflare di WTR-LAB kadang menerima
+ * satu kombinasi dan menolak yang lain untuk IP pusat data; varian dicoba berurutan dan yang
+ * berhasil dipakai. Bila semuanya ditolak, pesan galat memuat status tiap varian.
+ */
+type ReaderReply = {
+  success?: boolean;
+  error?: string;
+  message?: string;
+  code?: string;
+  requireTurnstile?: boolean;
+  content_url?: string;
+  chapter?: Chapter & { char_count?: number };
+};
+
+const READER_VARIANTS: { name: string; headers: (referer: string) => Record<string, string> }[] = [
+  { name: "browser", headers: (r) => apiHeaders(r) },
+  {
+    name: "minimal",
+    headers: (r) => ({ "content-type": "application/json", accept: "application/json", referer: r }),
+  },
+  {
+    name: "xhr",
+    headers: (r) => ({
+      "content-type": "application/json",
+      accept: "application/json, text/plain, */*",
+      referer: r,
+      origin: BASE,
+      "x-requested-with": "XMLHttpRequest",
+    }),
+  },
+  {
+    name: "tanpa-referer",
+    headers: () => ({ "content-type": "application/json", accept: "application/json" }),
+  },
+];
+
+async function readerGet(referer: string, body: unknown): Promise<ReaderReply> {
+  const notes: string[] = [];
+  for (const variant of READER_VARIANTS) {
+    try {
+      const res = await fetchJson<ReaderReply>(
+        `${BASE}/api/reader/get`,
+        { method: "POST", headers: variant.headers(referer), body: JSON.stringify(body) },
+        25000,
+      );
+      return res;
+    } catch (e) {
+      if (!(e instanceof HttpError)) throw e;
+      notes.push(`${variant.name}: ${e.status}`);
+      // Galat 4xx selain 403 berarti permintaannya sampai ke aplikasi (mis. chapter terkunci).
+      if (e.status < 500 && e.status !== 403) throw e;
+    }
+  }
+  throw new HttpError(
+    502,
+    `Server sumber menolak permintaan baca chapter (${notes.join(", ")}). WTR-LAB memblokir akses dari luar browser; coba lagi nanti atau buka chapter langsung di situsnya.`,
+  );
+}
+
+/**
  * Tandai langkah mana yang gagal. Pesan galat dari fetchJson sudah menyebut status; awalan ini
  * membuat penyebab 403 di situs sumber (panggilan API atau berkas isi) langsung kelihatan.
  */
@@ -281,30 +341,10 @@ async function chapterContent(rawId: number, slug: string, order: number) {
   // Pastikan cookie Cloudflare terisi (GET halaman chapter) sebelum memanggil API baca.
   if (!jarCookie()) await html(`/en/novel/${rawId}/${slug || "novel"}/chapter-${order}`).catch(() => "");
   const chapterId = await findChapterId(rawId, order);
-  type ReaderReply = {
-    success?: boolean;
-    error?: string;
-    message?: string;
-    code?: string;
-    requireTurnstile?: boolean;
-    content_url?: string;
-    chapter?: Chapter & { char_count?: number };
-  };
-  const reader = await step("reader/get", () =>
-    fetchJson<ReaderReply>(
-      `${BASE}/api/reader/get`,
-      {
-        method: "POST",
-        headers: apiHeaders(referer),
-        body: JSON.stringify(
-          chapterId
-            ? { translate: "ai", language: "en", chapter_id: chapterId, raw_id: rawId }
-            : { translate: "ai", language: "en", raw_id: rawId, chapter_no: order },
-        ),
-      },
-      25000,
-    ),
-  );
+  const payloadBody = chapterId
+    ? { translate: "ai", language: "en", chapter_id: chapterId, raw_id: rawId }
+    : { translate: "ai", language: "en", raw_id: rawId, chapter_no: order };
+  const reader = await step("reader/get", () => readerGet(referer, payloadBody));
 
   if (!reader?.success) {
     if (reader?.requireTurnstile) throw new HttpError(503, "Chapter ini sedang dilindungi Cloudflare Turnstile di situs sumber. Coba lagi nanti.");

@@ -222,31 +222,6 @@ const DEVICES = ["desktop", "tablet", "mobile"] as const;
 
 export const workerEndpoints: Endpoint[] = [
   {
-    category: "tools", slug: "ssweb", kind: "image",
-    title: "Screenshot Website v2",
-    description: "Tangkapan layar halaman web dari browser di server sendiri. Bisa satu halaman penuh dari atas sampai bawah, mode gelap, dan jeda tunggu untuk halaman yang lambat. Hasilnya langsung berupa gambar.",
-    params: [
-      { name: "url", required: true, description: "Alamat halaman web.", example: "https://nextjs.org" },
-      { name: "device", description: "Perangkat: desktop (1366x768), tablet (820x1180), atau mobile (390x844). Default desktop.", example: "desktop", options: [...DEVICES] },
-      { name: "full", description: "Isi 1 untuk memotret seluruh halaman dari atas sampai bawah (maks tinggi 12.000 piksel).", example: "1", options: ["0", "1"] },
-      { name: "dark", description: "Isi 1 untuk mode gelap, bila situsnya mendukung.", example: "0", options: ["0", "1"] },
-      { name: "format", description: "png atau jpg. Default png. Gambar di atas 4 MB otomatis dikirim sebagai jpg.", example: "png", options: ["png", "jpg"] },
-      { name: "wait", description: "Jeda tambahan setelah halaman dimuat, 0 sampai 10 detik. Default 0.", example: "0" },
-    ],
-    handler: async ({ sp }) => {
-      const url = parseHttpUrl(need(sp, "url", 2000)).toString();
-      const res = await callWorker("ssweb", {
-        url,
-        device: choice(sp, "device", DEVICES, "desktop"),
-        full: flag(sp, "full"),
-        dark: flag(sp, "dark"),
-        format: choice(sp, "format", ["png", "jpg"], "png"),
-        wait: Math.round(num(sp, "wait", 0, 0, 10)),
-      }, null, 75_000);
-      return passThrough(res, "image/");
-    },
-  },
-  {
     category: "tools", slug: "web2pdf", kind: "json",
     title: "Website ke PDF",
     description: `Simpan sebuah halaman web sebagai berkas PDF, lengkap dengan gambar dan warna latarnya. Hasilnya tautan unduhan PDF. ${KEEP}`,

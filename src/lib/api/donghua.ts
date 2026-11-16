@@ -1,7 +1,7 @@
-import type { CheerioAPI } from "cheerio";
+import { load, type CheerioAPI } from "cheerio";
 import type { Endpoint } from "./types";
 import { HttpError } from "./types";
-import { binaryResponse, fetchRaw, need, num, opt } from "./helpers";
+import { binaryResponse, fetchJson, fetchRaw, need, num, opt } from "./helpers";
 import { absUrl, browserHeaders, clean, cleanSlug, escapeHtml, fetchPage, imgSrc, pathParts, type El, type Page } from "./scrape";
 
 /*
@@ -179,61 +179,125 @@ function httpsUrl(raw: string | undefined | null): string | null {
   }
 }
 
+/** ID episode internal Anichin (dipakai API /api/theme), diambil dari #as-servers[data-episode]. */
+function episodeId($: CheerioAPI): string | null {
+  const id = clean($("#as-servers").attr("data-episode"));
+  if (/^\d+$/.test(id)) return id;
+  const m = $("body").text().match(/"episode_?id"\s*:\s*"?([0-9]+)/i);
+  return m?.[1] ?? null;
+}
+
+type ThemeServers = { status?: boolean; html?: string; downloads?: string };
+
+const THEME_HEADERS = { accept: "application/json, text/javascript, */*; q=0.01", "x-requested-with": "XMLHttpRequest" };
+
 /**
- * Link player episode. Anichin menyimpan daftar server di <select class="mirror"> sebagai HTML
- * iframe ter-encode base64; sebagian halaman juga punya iframe bawaan.
+ * Server player & link unduhan dimuat lewat API JSON internal situs
+ * (/api/theme/episode/servers), bukan ditulis langsung di HTML. Tiap tautan server
+ * membawa `data-hash` yang ditukar jadi URL embed via /api/theme/episode/source.
  */
-function servers($: CheerioAPI): Server[] {
-  const out: Server[] = [];
+async function episodeTheme(episodeId: string | null): Promise<ThemeServers | null> {
+  if (!episodeId) return null;
+  try {
+    return await fetchJson<ThemeServers>(
+      `${BASE}/api/theme/episode/servers?episodeId=${encodeURIComponent(episodeId)}`,
+      { headers: browserHeaders(REFERER, THEME_HEADERS) },
+      15000,
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** Tukar data-hash server jadi URL embed yang bisa dipasang di iframe. */
+async function resolveSource(hash: string): Promise<string | null> {
+  try {
+    const res = await fetchJson<{ status?: boolean; url?: string }>(
+      `${BASE}/api/theme/episode/source?get=${encodeURIComponent(hash)}`,
+      { headers: browserHeaders(`${BASE}/`, THEME_HEADERS) },
+      15000,
+    );
+    return res?.status && res.url ? httpsUrl(res.url) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Daftar server dari blok HTML API /episode/servers. */
+function serverRefs($: CheerioAPI, html: string): { name: string; hash: string }[] {
+  const out: { name: string; hash: string }[] = [];
+  if (!html) return out;
   const seen = new Set<string>();
-  const add = (name: string, raw: string | null | undefined) => {
-    const url = httpsUrl(raw);
-    if (!url || seen.has(url)) return;
-    seen.add(url);
-    out.push({ index: out.length + 1, name: name || `Server ${out.length + 1}`, url, iframe: iframeTag(url) });
-  };
-  $("select.mirror option, .mirror option, select#server option").each((_, o) => {
-    const value = clean($(o).attr("value"));
-    if (!value) return;
-    let decoded = value;
-    if (!/^https?:\/\//i.test(value) && !value.startsWith("//")) {
-      try {
-        decoded = Buffer.from(value, "base64").toString("utf8");
-      } catch {
-        return;
-      }
-    }
-    const src =
-      decoded.match(/<(?:iframe|embed|video|source)[^>]*?\ssrc\s*=\s*["']([^"']+)["']/i)?.[1] ??
-      (/^(https?:)?\/\//i.test(decoded.trim()) ? decoded.trim() : null);
-    add(clean($(o).text()), src?.replace(/&amp;/g, "&"));
-  });
-  $("#pembed iframe, .player-embed iframe, .video-content iframe, .megavid iframe").each((_, f) => {
-    const el = $(f);
-    add(out.length ? "" : "Default", el.attr("src") || el.attr("data-src") || el.attr("data-litespeed-src"));
+  load(html)(".server-item a[data-hash]").each((_, a) => {
+    const el = $(a);
+    const hash = clean(el.attr("data-hash"));
+    if (!hash || seen.has(hash)) return;
+    seen.add(hash);
+    out.push({ name: clean(el.text()) || `Server ${out.length + 1}`, hash });
   });
   return out;
 }
 
-function downloads($: CheerioAPI) {
-  const out: { title: string | null; quality: string | null; links: { name: string; url: string }[] }[] = [];
-  $(".soraddlx, .soraddl").each((_, box) => {
-    const title = clean($(box).find(".sorattlx, .sorattl").first().text()) || null;
-    $(box)
+/**
+ * Server player episode. Anichin memuatnya lewat API JSON internal
+ * (/api/theme/episode/servers) lalu menukar `data-hash` jadi URL embed lewat
+ * /api/theme/episode/source. Sebagian halaman juga menaruh iframe langsung.
+ */
+async function servers($: CheerioAPI): Promise<Server[]> {
+  const refs = serverRefs($, (await episodeTheme(episodeId($)))?.html ?? "");
+  const resolved = await Promise.all(refs.map((r) => resolveSource(r.hash)));
+  const out: Server[] = [];
+  const seen = new Set<string>();
+  refs.forEach((ref, i) => {
+    const url = resolved[i];
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    out.push({ index: out.length + 1, name: ref.name, url, iframe: iframeTag(url) });
+  });
+  if (out.length) return out;
+
+  // Cadangan: iframe yang sudah ada di HTML.
+  $("#pembed iframe, .player-embed iframe, .video-content iframe, .megavid iframe").each((_, f) => {
+    const el = $(f);
+    const url = httpsUrl(el.attr("src") || el.attr("data-src") || el.attr("data-litesite-src"));
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    out.push({ index: out.length + 1, name: out.length ? `Server ${out.length + 1}` : "Default", url, iframe: iframeTag(url) });
+  });
+  return out;
+}
+
+type Download = { title: string | null; quality: string | null; links: { name: string; url: string }[] };
+
+/** Link unduhan dari blok .soraddlx (HTML statis di halaman atau dari API /episode/servers). */
+function downloadsFrom(html: string): Download[] {
+  const out: Download[] = [];
+  if (!html) return out;
+  const $d = load(html);
+  $d(".soraddlx, .soraddl").each((_, box) => {
+    const title = clean($d(box).find(".sorattlx, .sorattl").first().text()) || null;
+    $d(box)
       .find(".soraurlx, .soraurl")
       .each((_, row) => {
-        const links = $(row)
+        const links = $d(row)
           .find("a[href]")
           .map((_, a) => {
-            const url = absUrl($(a).attr("href"), BASE);
-            return url ? { name: clean($(a).text()), url } : null;
+            const url = absUrl($d(a).attr("href"), BASE);
+            return url ? { name: clean($d(a).text()), url } : null;
           })
           .get()
-          .filter(Boolean);
-        if (links.length) out.push({ title, quality: clean($(row).find("strong, .res").first().text()) || null, links });
+          .filter((x): x is { name: string; url: string } => Boolean(x));
+        if (links.length) out.push({ title, quality: clean($d(row).find("strong, .res").first().text()) || null, links });
       });
   });
   return out;
+}
+
+/** Unduhan: pakai HTML halaman bila ada, kalau kosong ambil dari API internal. */
+async function downloads($: CheerioAPI, theme: ThemeServers | null): Promise<Download[]> {
+  const local = downloadsFrom($.html());
+  if (local.length) return local;
+  return downloadsFrom(theme?.downloads ?? "");
 }
 
 /** Metadata seri dari blok .single-info / .bigcontent (ada di halaman seri maupun episode). */
@@ -331,7 +395,7 @@ async function tryPage(url: string): Promise<Page | null> {
 }
 
 function isEpisodePage($: CheerioAPI): boolean {
-  return $("select.mirror, #pembed, .player-embed, .episodelist, .megavid").length > 0;
+  return $("select.mirror, #as-servers, #pembed, .player-embed, .episodelist, .megavid").length > 0;
 }
 
 async function loadEpisode(slug: string): Promise<Page> {
@@ -633,7 +697,8 @@ export const donghuaEndpoints: Endpoint[] = [
       const { slug } = slugParam(need(sp, "slug", 400));
       const want = opt(sp, "server") ? Math.floor(num(sp, "server", 1, 1, 60)) : 0;
       const { $ } = await loadEpisode(slug);
-      const list = servers($);
+      const theme = await episodeTheme(episodeId($));
+      const list = await servers($);
       const info = seriesInfo($);
       const series = seriesRefFromEpisode($);
       const title = clean($("h1.entry-title, h1").first().text()) || null;
@@ -659,7 +724,7 @@ export const donghuaEndpoints: Endpoint[] = [
         },
         prev_episode: navRef($, "prev"),
         next_episode: navRef($, "next"),
-        downloads: downloads($),
+        downloads: await downloads($, theme),
         info,
       };
     },
@@ -678,7 +743,7 @@ export const donghuaEndpoints: Endpoint[] = [
       const { slug } = slugParam(need(sp, "slug", 400));
       const want = Math.floor(num(sp, "server", 1, 1, 60));
       const { $ } = await loadEpisode(slug);
-      const list = servers($);
+      const list = await servers($);
       if (!list.length) throw new HttpError(404, "Player video untuk episode ini tidak ditemukan.");
       const server = list[want - 1];
       if (!server) throw new HttpError(404, `Server ${want} tidak tersedia. Episode ini punya ${list.length} server.`);

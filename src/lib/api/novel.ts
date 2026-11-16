@@ -474,6 +474,7 @@ async function chapterViaApi(rawId: number, slug: string, order: number) {
     url: referer,
     characters: reader.chapter?.char_count ?? null,
     paragraphs: paragraphs.length,
+    source: "api",
     navigation: {
       prev: order > 1 ? chapterUrl(rawId, slug, order - 1) : null,
       next: chapterUrl(rawId, slug, order + 1),
@@ -488,6 +489,10 @@ async function chapterViaApi(rawId: number, slug: string, order: number) {
   chapter tetap bisa dibaca lewat perender ini. Dipakai hanya bila semua jalur API gagal.
 */
 const READER_RENDER = "https://r.jina.ai/";
+
+/** Baris antarmuka WTR-LAB yang tidak boleh dianggap isi chapter. */
+const BOILERPLATE =
+  /^(#\d+\s*)?(ad blocker detected|problematic ad|you can disable popup ads|guests can preview|sign up for free|or click here to read|please disable your ad blocker|report it here)\b/i;
 
 type Rendered = { title: string | null; paragraphs: string[] };
 
@@ -510,6 +515,8 @@ function renderParagraphs(text: string): Rendered {
       }
     }
     if (/^!\[/.test(line) || /adform|monetixads|prebid|doubleclick|googlesyndication/i.test(line)) continue;
+    // Teks antarmuka situs (peringatan pengunci, pengingat adblock) bukan isi chapter.
+    if (BOILERPLATE.test(line)) continue;
     line = line
       .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
       .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
@@ -544,6 +551,15 @@ async function chapterViaRender(url: string): Promise<Rendered> {
 /** Isi satu chapter: API situs lebih dulu, perender pihak ketiga bila diblokir. */
 async function chapterContent(rawId: number, slug: string, order: number) {
   const referer = chapterUrl(rawId, slug, order);
+  // Daftar chapter menyebut status kunci; chapter terkunci tidak perlu dicoba di jalur mana pun.
+  const meta = await findChapter(rawId, order).catch(() => null);
+  if (meta?.locked) {
+    throw new HttpError(
+      403,
+      `Chapter ${order} terkunci di WTR-LAB (tamu hanya bisa membaca 10 chapter pertama setiap judul). Buka langsung di situsnya atau pakai akun yang sudah unlock.`,
+    );
+  }
+
   let firstError: unknown = null;
   try {
     return await chapterViaApi(rawId, slug, order);
@@ -555,10 +571,6 @@ async function chapterContent(rawId: number, slug: string, order: number) {
 
   const rendered = await chapterViaRender(referer).catch(() => null);
   if (!rendered || rendered.paragraphs.length < 3) throw firstError;
-
-  // Judul resmi diambil dari daftar chapter situs; judul hasil perender hanya cadangan karena
-  // kadang memuat penomoran versi mesin penerjemah.
-  const meta = await findChapter(rawId, order).catch(() => null);
 
   return {
     raw_id: rawId,
@@ -735,7 +747,7 @@ export const novelEndpoints: Endpoint[] = [
     slug: "chapter",
     kind: "json",
     title: "Baca Chapter Novel",
-    description: "Isi teks satu chapter novel (paragraf bahasa Inggris hasil terjemahan AI WTR-LAB) beserta navigasi chapter sebelum dan sesudahnya.",
+    description: "Isi teks satu chapter novel (paragraf bahasa Inggris hasil terjemahan AI WTR-LAB) beserta navigasi chapter sebelum dan sesudahnya. Tamu WTR-LAB hanya bisa membaca 10 chapter pertama tiap judul; chapter terkunci dijawab 403.",
     params: [
       { name: "slug", required: true, description: "raw_id, slug, atau URL novel/chapter WTR-LAB.", example: "106254" },
       { name: "chapter", description: "Nomor chapter. Bila kosong, dipakai dari URL atau chapter 1.", example: "1" },

@@ -663,6 +663,8 @@ export const donghuaEndpoints: Endpoint[] = [
   {
     category: "donghua",
     slug: "detail-anime",
+    // Alias `detail` supaya seragam dengan kategori anime/film (registry memakai yang pertama mendaftar).
+    aliases: ["detail"],
     kind: "json",
     title: "Detail Donghua",
     description:

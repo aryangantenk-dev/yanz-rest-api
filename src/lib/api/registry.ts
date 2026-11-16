@@ -47,7 +47,18 @@ export const endpoints: Endpoint[] = [
   ...workerEndpoints,
 ];
 
-const index = new Map(endpoints.map((e) => [`${e.category}/${e.slug}`, e]));
+// Jalur utama didaftarkan lebih dulu supaya slug kanonik selalu menang atas alias.
+const index = new Map<string, Endpoint>();
+for (const e of endpoints) {
+  const key = `${e.category}/${e.slug}`;
+  if (!index.has(key)) index.set(key, e);
+}
+for (const e of endpoints) {
+  for (const alias of e.aliases ?? []) {
+    const key = `${e.category}/${alias}`;
+    if (!index.has(key)) index.set(key, e);
+  }
+}
 
 export function findEndpoint(key: string): Endpoint | undefined {
   return index.get(key);

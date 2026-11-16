@@ -38,6 +38,8 @@ export type Endpoint = {
   description: string;
   params: Param[];
   kind: "json" | "image" | "video" | "html";
+  /** Slug lain yang menunjuk ke endpoint yang sama (didaftarkan sebagai jalur tambahan). */
+  aliases?: string[];
   /**
    * Endpoint ini juga menerima berkas lewat POST (multipart/form-data, nama field `field`).
    * Endpoint lain hanya menerima GET. Playground menampilkan pemilih berkas untuknya.

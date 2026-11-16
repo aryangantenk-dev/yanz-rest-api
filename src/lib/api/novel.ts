@@ -521,14 +521,24 @@ function renderParagraphs(text: string): Rendered {
   return { title, paragraphs };
 }
 
+/** Perender kadang mengembalikan snapshot iklan; ulangi tanpa cache sebelum menyerah. */
 async function chapterViaRender(url: string): Promise<Rendered> {
-  const res = await fetch(`${READER_RENDER}${url}`, {
-    headers: { "user-agent": browserHeaders(REFERER)["user-agent"], accept: "text/plain" },
-    cache: "no-store",
-    signal: AbortSignal.timeout(50000),
-  });
-  if (!res.ok) throw new HttpError(502, `Pembaca cadangan merespons dengan status ${res.status}.`);
-  return renderParagraphs(await res.text());
+  const ua = browserHeaders(REFERER)["user-agent"];
+  let last: Rendered | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 1500 * attempt));
+    const res = await fetch(`${READER_RENDER}${url}`, {
+      headers: { "user-agent": ua, accept: "text/plain", "x-no-cache": "true", "x-retain-images": "none" },
+      cache: "no-store",
+      signal: AbortSignal.timeout(50000),
+    }).catch(() => null);
+    if (!res?.ok) continue;
+    const parsed = renderParagraphs(await res.text().catch(() => ""));
+    last = parsed;
+    if (parsed.paragraphs.length >= 3) return parsed;
+  }
+  if (last) return last;
+  throw new HttpError(502, "Pembaca cadangan tidak merespons.");
 }
 
 /** Isi satu chapter: API situs lebih dulu, perender pihak ketiga bila diblokir. */

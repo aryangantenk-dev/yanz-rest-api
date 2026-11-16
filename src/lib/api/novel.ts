@@ -87,18 +87,54 @@ function nextProps(html: string): Record<string, unknown> {
   }
 }
 
+/*
+  Cloudflare di WTR-LAB memberi cookie (mis. __cf_bm) saat halaman HTML dibuka, dan panggilan
+  API POST /api/reader/get dari IP server ditolak 403 bila cookie itu tidak ikut. Cookie yang
+  diterima dari GET disimpan singkat lalu ditempelkan ke panggilan API berikutnya.
+*/
+const jar = { cookie: "", at: 0 };
+const JAR_TTL = 15 * 60 * 1000;
+
+function rememberCookies(res: Response) {
+  const list = typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [];
+  const pairs = new Map<string, string>();
+  for (const raw of list) {
+    const [pair] = raw.split(";");
+    const eq = pair.indexOf("=");
+    if (eq > 0) pairs.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
+  }
+  if (!pairs.size) return;
+  // Simpan hanya cookie yang bukan sesi akun: cukup penanda bot/klarifikasi Cloudflare.
+  const kept = [...pairs].filter(([k]) => /^(_|cf|wtr)/i.test(k)).map(([k, v]) => `${k}=${v}`);
+  if (kept.length) {
+    jar.cookie = kept.join("; ");
+    jar.at = Date.now();
+  }
+}
+
+function jarCookie(): string {
+  return jar.cookie && Date.now() - jar.at < JAR_TTL ? jar.cookie : "";
+}
+
 async function html(path: string): Promise<string> {
   const res = await fetch(
     /^https?:\/\//i.test(path) ? path : `${BASE}${path}`,
     {
-      headers: browserHeaders(REFERER, { accept: "text/html,application/xhtml+xml,*/*;q=0.8" }),
+      headers: browserHeaders(REFERER, { accept: "text/html,application/xhtml+xml,*/*;q=0.8", ...(jarCookie() ? { cookie: jarCookie() } : {}) }),
       cache: "no-store",
     },
   ).catch(() => null);
   if (!res) throw new HttpError(502, "Gagal menghubungi WTR-LAB.");
   if (res.status === 404) throw new HttpError(404, "Novel tidak ditemukan di WTR-LAB.");
   if (!res.ok) throw new HttpError(502, `WTR-LAB merespons dengan status ${res.status}.`);
+  rememberCookies(res);
   return res.text();
+}
+
+/** Header untuk panggilan API JSON: sama seperti browser yang membuka halaman tadi. */
+function apiHeaders(referer: string): Record<string, string> {
+  const cookie = jarCookie();
+  return browserHeaders(referer, { ...JSON_HEADERS, ...(cookie ? { cookie } : {}) });
 }
 
 const JSON_HEADERS = {
@@ -139,7 +175,7 @@ type SearchHit = { id?: number; raw_id?: number; slug?: string; status?: number;
 async function searchApi(query: string): Promise<SearchHit[]> {
   const res = await fetchJson<{ success?: boolean; data?: SearchHit[] }>(
     `${BASE}/api/search`,
-    { method: "POST", headers: browserHeaders(REFERER, JSON_HEADERS), body: JSON.stringify({ text: query }) },
+    { method: "POST", headers: apiHeaders(REFERER), body: JSON.stringify({ text: query }) },
     20000,
   );
   if (res?.success === false) throw new HttpError(502, "Pencarian WTR-LAB ditolak server sumber.");
@@ -154,7 +190,7 @@ async function allChapters(rawId: number, total: number): Promise<Chapter[]> {
     const end = Math.min(limit, start + 499);
     const res = await fetchJson<{ chapters?: Chapter[] }>(
       `${BASE}/api/chapters/${rawId}?start=${start}&end=${end}`,
-      { headers: browserHeaders(REFERER, JSON_HEADERS) },
+      { headers: apiHeaders(REFERER) },
       20000,
     );
     const batch = Array.isArray(res?.chapters) ? res.chapters : [];
@@ -214,9 +250,23 @@ function genreLabels(html: string, ids: unknown): string[] {
   return [...byId.values()];
 }
 
+/** Id chapter (bukan nomor urut) yang dipakai klien WTR-LAB saat memanggil /api/reader/get. */
+async function findChapterId(rawId: number, order: number): Promise<number | null> {
+  const res = await fetchJson<{ chapters?: Chapter[] }>(
+    `${BASE}/api/chapters/${rawId}?start=${order}&end=${order}`,
+    { headers: apiHeaders(REFERER) },
+    20000,
+  ).catch(() => null);
+  const hit = Array.isArray(res?.chapters) ? res.chapters.find((c) => c.order === order) : null;
+  return hit?.id ?? null;
+}
+
 /** Isi satu chapter: reader/get → content_url → paragraf. */
 async function chapterContent(rawId: number, slug: string, order: number) {
   const referer = chapterUrl(rawId, slug, order);
+  // Pastikan cookie Cloudflare terisi (GET halaman chapter) sebelum memanggil API baca.
+  if (!jarCookie()) await html(`/en/novel/${rawId}/${slug || "novel"}/chapter-${order}`).catch(() => "");
+  const chapterId = await findChapterId(rawId, order);
   const reader = await fetchJson<{
     success?: boolean;
     error?: string;
@@ -229,8 +279,12 @@ async function chapterContent(rawId: number, slug: string, order: number) {
     `${BASE}/api/reader/get`,
     {
       method: "POST",
-      headers: browserHeaders(referer, JSON_HEADERS),
-      body: JSON.stringify({ translate: "ai", language: "en", raw_id: rawId, chapter_no: order }),
+      headers: apiHeaders(referer),
+      body: JSON.stringify(
+        chapterId
+          ? { translate: "ai", language: "en", chapter_id: chapterId, raw_id: rawId }
+          : { translate: "ai", language: "en", raw_id: rawId, chapter_no: order },
+      ),
     },
     25000,
   );
@@ -244,7 +298,7 @@ async function chapterContent(rawId: number, slug: string, order: number) {
 
   const payload = await fetchJson<{ data?: { data?: { body?: unknown; glossary_data?: { terms?: unknown } } } }>(
     /^https?:\/\//i.test(reader.content_url) ? reader.content_url : `${BASE}${reader.content_url}`,
-    { headers: browserHeaders(referer, JSON_HEADERS) },
+    { headers: apiHeaders(referer) },
     25000,
   );
   const inner = payload?.data?.data ?? {};

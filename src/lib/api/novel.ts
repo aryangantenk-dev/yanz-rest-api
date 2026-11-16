@@ -617,8 +617,10 @@ async function chapterContent(rawId: number, slug: string, order: number) {
   let rendered: Rendered | null = null;
   let renderNote = "";
   // Perender kadang mengevaluasi halaman sebelum isinya terhidrasi: ulangi beberapa kali.
-  for (let attempt = 0; attempt < 4 && !rendered; attempt++) {
-    if (attempt) await new Promise((r) => setTimeout(r, 2000 * attempt));
+  // Dua putaran saja: tiap perender punya kuota sendiri, jadi percobaan berulang justru
+  // menghabiskan kuota dan memperlambat jawaban.
+  for (let attempt = 0; attempt < 2 && !rendered; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 1200));
     const candidate = await chapterViaRender(referer, order).catch((e: unknown) => {
       renderNote = e instanceof HttpError ? `${e.status}: ${e.message}` : String(e);
       return null;

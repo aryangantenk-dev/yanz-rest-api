@@ -58,16 +58,7 @@ function hasNextPage($: CheerioAPI, page: number): boolean {
   );
 }
 
-/** Label kecil di kartu, mis. "Completed · Donghua · Ep 63 · Sub". */
-function labels(el: El): string[] {
-  return clean(el.find(".limit .typez, .limit .status, .limit .epx, .limit .sb").text())
-    .split(/\s{2,}/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-/** Kartu seri/episode: <div class="bs"><div class="bsx">…</div></div> */
-function card($: CheerioAPI, el: El): {
+type Card = {
   title: string;
   kind: "series" | "episode";
   slug: string;
@@ -77,44 +68,62 @@ function card($: CheerioAPI, el: El): {
   type: string | null;
   episode: string | null;
   sub: string | null;
+  episode_title: string | null;
   latest_episode: { title: string; slug: string; url: string } | null;
-} | null {
-  const link = el.find('a[href*="/anime/"]').first();
-  const ref = classify(link.attr("href"));
-  if (!ref || ref.kind !== "series") {
-    const epRef = classify(el.find("a[href]").first().attr("href"));
-    if (!epRef) return null;
-    const title = clean(el.find(".tt h2").first().text()) || clean(el.find(".tt").first().text());
-    const seriesLink = classify(el.find('.tt a[href*="/anime/"]').first().attr("href"));
+};
+
+/**
+ * Kartu seri/episode: <div class="bs"><div class="bsx">…</div></div>.
+ * Di dalam .tt, <h2> berisi judul episode (atau judul seri bila kartunya kartu seri),
+ * sedangkan teks di luar <h2> adalah nama serinya.
+ */
+function card($: CheerioAPI, el: El): Card | null {
+  const tt = el.find(".tt").first();
+  const h2 = clean(tt.find("h2").first().text());
+  const ttRest = (() => {
+    const clone = tt.clone();
+    clone.find("h2").remove();
+    return clean(clone.text());
+  })();
+
+  // Kartu seri: tautan utama menuju /anime/<slug>.
+  const seriesLink = el.find('a[href*="/anime/"]').first();
+  const seriesRef = classify(seriesLink.attr("href"));
+  if (seriesRef?.kind === "series") {
+    const latestRef = classify(el.find('.tt a[href]:not([href*="/anime/"])').last().attr("href"));
     return {
-      title: seriesLink ? clean(el.find(".tt").clone().children("h2").end().text()) || title : title,
-      kind: "episode",
-      slug: epRef.slug,
-      url: epRef.url,
+      title: h2 || ttRest || clean(seriesLink.attr("title")) || seriesRef.slug,
+      kind: "series",
+      slug: seriesRef.slug,
+      url: seriesRef.url,
       poster: imgSrc(el.find("img").first(), BASE),
       status: clean(el.find(".status").first().text()) || null,
       type: clean(el.find(".typez").first().text()) || null,
       episode: clean(el.find(".epx").first().text()) || null,
       sub: clean(el.find(".sb").first().text()) || null,
-      latest_episode: epRef.kind === "episode" ? { title, slug: epRef.slug, url: epRef.url } : null,
+      episode_title: null,
+      latest_episode: latestRef?.kind === "episode" ? { title: h2 || latestRef.slug, slug: latestRef.slug, url: latestRef.url } : null,
     };
   }
-  const latest = classify(el.find('.tt a[href]:not([href*="/anime/"])').last().attr("href"));
+
+  // Kartu episode: tautan utama menuju /<slug-episode>.
+  const epRef = classify(el.find("a[href]").first().attr("href"));
+  if (!epRef || epRef.kind !== "episode") return null;
+  const title = ttRest || clean(el.find("a").first().attr("title")) || h2 || epRef.slug;
   return {
-    title: clean(el.find(".tt").first().text()) || clean(link.attr("title")) || ref.slug,
-    kind: "series",
-    slug: ref.slug,
-    url: ref.url,
+    title,
+    kind: "episode",
+    slug: epRef.slug,
+    url: epRef.url,
     poster: imgSrc(el.find("img").first(), BASE),
     status: clean(el.find(".status").first().text()) || null,
     type: clean(el.find(".typez").first().text()) || null,
     episode: clean(el.find(".epx").first().text()) || null,
     sub: clean(el.find(".sb").first().text()) || null,
-    latest_episode: latest?.kind === "episode" ? { title: clean(el.find(".tt h2").first().text()), slug: latest.slug, url: latest.url } : null,
+    episode_title: h2 || null,
+    latest_episode: { title: h2 || title, slug: epRef.slug, url: epRef.url },
   };
 }
-
-type Card = NonNullable<ReturnType<typeof card>>;
 
 /** Semua kartu pada satu halaman daftar. */
 function cards($: CheerioAPI): Card[] {

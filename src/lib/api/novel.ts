@@ -596,7 +596,9 @@ async function chapterContent(rawId: number, slug: string, order: number) {
   }
 
   let rendered: Rendered | null = null;
-  for (let attempt = 0; attempt < 2 && !rendered; attempt++) {
+  // Perender kadang mengevaluasi halaman sebelum isinya terhidrasi: ulangi beberapa kali.
+  for (let attempt = 0; attempt < 3 && !rendered; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 1500 * attempt));
     const candidate = await chapterViaRender(attempt ? `${referer}?cb=${Date.now()}` : referer, order).catch(() => null);
     if (candidate && candidate.paragraphs.length >= 3 && contentMatches(candidate.paragraphs.join(" "), tidy(meta?.title))) {
       rendered = candidate;

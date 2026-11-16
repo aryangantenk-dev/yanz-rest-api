@@ -319,15 +319,23 @@ async function readerGet(referer: string, body: unknown): Promise<ReaderReply> {
   }
   // Vercel diblokir Cloudflare; server perantara (Supabase Edge Function) dipakai sebagai jalan lain.
   if (proxyConfigured()) {
-    const relay = await proxyJson(`${BASE}/api/reader/get`, {
+    const relay = await viaProxy(`${BASE}/api/reader/get`, {
+      label: "Server perantara",
+      accept: "application/json",
       referer,
       origin: true,
       xhr: true,
       body: JSON.stringify(body),
       timeoutMs: 30000,
-    }).catch(() => null);
-    if (relay) return relay;
-    notes.push("perantara: ditolak");
+    }).catch((e: unknown) => ({ status: e instanceof HttpError ? e.status : 0, text: "", type: "", finalUrl: "" }));
+    notes.push(`perantara: ${relay.status}`);
+    if (relay.status >= 200 && relay.status < 300) {
+      try {
+        return JSON.parse(relay.text) as ReaderReply;
+      } catch {
+        notes.push("perantara: jawaban bukan JSON");
+      }
+    }
   }
   throw new HttpError(
     502,

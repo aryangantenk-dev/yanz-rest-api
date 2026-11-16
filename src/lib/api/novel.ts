@@ -1,5 +1,6 @@
 import type { Endpoint } from "./types";
 import { HttpError } from "./types";
+import { load } from "cheerio";
 import { fetchJson, need, num, opt } from "./helpers";
 import { browserHeaders, clean } from "./scrape";
 
@@ -100,7 +101,13 @@ async function html(path: string): Promise<string> {
   return res.text();
 }
 
-const JSON_HEADERS = { accept: "application/json, text/plain, */*", "content-type": "application/json", origin: BASE, referer: REFERER };
+const JSON_HEADERS = {
+  accept: "application/json, text/plain, */*",
+  "content-type": "application/json",
+  "sec-fetch-site": "same-origin",
+  "sec-fetch-mode": "cors",
+  "sec-fetch-dest": "empty",
+};
 
 type Target = { rawId: number; slug: string | null; chapter: number | null };
 
@@ -171,7 +178,8 @@ function chapterEntry(rawId: number, slug: string, ch: Chapter) {
 
 async function loadSerie(target: string) {
   const t = await resolveTarget(target);
-  const page = nextProps(await html(`/en/novel/${t.rawId}/${t.slug || "novel"}`));
+  const raw = await html(`/en/novel/${t.rawId}/${t.slug || "novel"}`);
+  const page = nextProps(raw);
   const serie = (page.serie ?? {}) as { serie_data?: Serie; ranks?: unknown; last_chapters?: Chapter[] };
   const data = serie.serie_data;
   if (!data) throw new HttpError(502, "Metadata novel tidak terbaca dari WTR-LAB.");
@@ -183,16 +191,27 @@ async function loadSerie(target: string) {
     target: { ...t, rawId, slug },
     serie: data,
     chapters,
-    genres: $genres(page),
+    genres: genreLabels(raw, data.genres),
     tags: Array.isArray(page.tags) ? (page.tags as { title?: string }[]).map((x) => x.title).filter((x): x is string => Boolean(x)) : [],
     ranks: serie.ranks ?? null,
   };
 }
 
-function $genres(page: Record<string, unknown>): string[] {
-  const serie = (page.serie ?? {}) as { serie_data?: Serie };
-  const list = serie.serie_data?.genres ?? [];
-  return Array.isArray(list) ? list.filter((g): g is string => typeof g === "string") : [];
+/** Genre di serie_data berupa angka (id); labelnya diambil dari tautan /en/novel-list?genre=<id>. */
+function genreLabels(html: string, ids: unknown): string[] {
+  const $ = load(html);
+  const byId = new Map<string, string>();
+  $('a[href*="genre="]').each((_, a) => {
+    const el = $(a);
+    const id = (el.attr("href") ?? "").match(/genre=(\d+)/)?.[1];
+    const name = tidy(el.text()).toLowerCase();
+    if (id && name && !byId.has(id)) byId.set(id, name);
+  });
+  if (Array.isArray(ids)) {
+    const mapped = ids.map((id) => byId.get(String(id))).filter((x): x is string => Boolean(x));
+    if (mapped.length) return mapped;
+  }
+  return [...byId.values()];
 }
 
 /** Isi satu chapter: reader/get → content_url → paragraf. */

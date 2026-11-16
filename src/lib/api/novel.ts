@@ -494,13 +494,14 @@ const READER_RENDER = "https://r.jina.ai/";
 const BOILERPLATE =
   /^(#\d+\s*)?(ad blocker detected|problematic ad|you can disable popup ads|guests can preview|sign up for free|or click here to read|please disable your ad blocker|report it here)\b/i;
 
-type Rendered = { title: string | null; paragraphs: string[] };
+type Rendered = { title: string | null; paragraphs: string[]; declared: number | null };
 
 /** Bersihkan markdown hasil perender menjadi paragraf teks. */
 function renderParagraphs(text: string): Rendered {
   const start = text.indexOf("Markdown Content:");
   const body = start >= 0 ? text.slice(start + "Markdown Content:".length) : text;
   let title: string | null = null;
+  let declared: number | null = null;
   const paragraphs: string[] = [];
   for (const raw of body.split("\n")) {
     let line = raw.trim();
@@ -523,18 +524,27 @@ function renderParagraphs(text: string): Rendered {
       .replace(/\*\*/g, "")
       .replace(/\s+/g, " ")
       .trim();
+    // Penanda nomor chapter dari halaman (mis. "#4 Chapter 4 ...") dipakai untuk memastikan
+    // isi yang diterima memang chapter yang diminta.
+    const mark = line.match(/^#(\d+)\s*Chapter\b/i);
+    if (mark) {
+      declared = Number(mark[1]);
+      line = line.replace(/^#\d+\s*/i, "");
+    }
     if (line) paragraphs.push(tidy(line));
   }
-  return { title, paragraphs };
+  return { title, paragraphs, declared };
 }
 
 /** Perender kadang mengembalikan snapshot iklan; ulangi tanpa cache sebelum menyerah. */
-async function chapterViaRender(url: string): Promise<Rendered> {
+async function chapterViaRender(url: string, order: number): Promise<Rendered> {
   const ua = browserHeaders(REFERER)["user-agent"];
   let last: Rendered | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt) await new Promise((r) => setTimeout(r, 1500 * attempt));
-    const res = await fetch(`${READER_RENDER}${url}`, {
+    // Percobaan berikutnya memakai penanda unik supaya perender tidak memakai snapshot lama.
+    const target = attempt ? `${url}${url.includes("?") ? "&" : "?"}cb=${Date.now()}${attempt}` : url;
+    const res = await fetch(`${READER_RENDER}${target}`, {
       headers: { "user-agent": ua, accept: "text/plain", "x-no-cache": "true", "x-retain-images": "none" },
       cache: "no-store",
       signal: AbortSignal.timeout(50000),
@@ -542,7 +552,10 @@ async function chapterViaRender(url: string): Promise<Rendered> {
     if (!res?.ok) continue;
     const parsed = renderParagraphs(await res.text().catch(() => ""));
     last = parsed;
-    if (parsed.paragraphs.length >= 3) return parsed;
+    if (parsed.paragraphs.length < 3) continue;
+    // Nomor chapter yang tertulis di halaman harus cocok; kalau tidak, snapshot-nya basi.
+    if (parsed.declared !== null && parsed.declared !== order) continue;
+    return parsed;
   }
   if (last) return last;
   throw new HttpError(502, "Pembaca cadangan tidak merespons.");
@@ -569,7 +582,7 @@ async function chapterContent(rawId: number, slug: string, order: number) {
     if (e instanceof HttpError && (e.status === 404 || e.status === 403)) throw e;
   }
 
-  const rendered = await chapterViaRender(referer).catch(() => null);
+  const rendered = await chapterViaRender(referer, order).catch(() => null);
   if (!rendered || rendered.paragraphs.length < 3) throw firstError;
 
   return {

@@ -372,9 +372,10 @@ async function readerGet(referer: string, body: unknown): Promise<ReaderReply> {
       }
     }
   }
+  console.warn(`[novel] reader/get ditolak WTR-LAB: ${notes.join(", ")}`);
   throw new HttpError(
     502,
-    `Server sumber menolak permintaan baca chapter (${notes.join(", ")}). WTR-LAB memblokir akses dari luar browser; coba lagi nanti atau buka chapter langsung di situsnya.`,
+    "WTR-LAB menolak permintaan isi chapter dari server ini (proteksi Cloudflare). Coba lagi beberapa saat lagi, atau buka chapternya langsung di wtr-lab.com.",
   );
 }
 
@@ -592,9 +593,7 @@ async function chapterContent(rawId: number, slug: string, order: number) {
     if (candidate && candidate.paragraphs.length >= 3) rendered = candidate;
   }
   if (!rendered) {
-    if (firstError instanceof HttpError && firstError.status >= 500 && renderNote) {
-      throw new HttpError(firstError.status, `${firstError.message} [render: ${renderNote}]`);
-    }
+    if (renderNote) console.warn(`[novel] perender gagal: ${renderNote}`);
     throw firstError;
   }
 
@@ -773,7 +772,7 @@ export const novelEndpoints: Endpoint[] = [
     slug: "chapter",
     kind: "json",
     title: "Baca Chapter Novel",
-    description: "Isi teks satu chapter novel (paragraf bahasa Inggris hasil terjemahan AI WTR-LAB) beserta navigasi chapter sebelum dan sesudahnya. Tamu WTR-LAB hanya bisa membaca 10 chapter pertama tiap judul; chapter terkunci dijawab 403.",
+    description: "Isi teks satu chapter novel (paragraf bahasa Inggris hasil terjemahan AI WTR-LAB) beserta navigasi chapter sebelum dan sesudahnya. Tamu WTR-LAB hanya bisa membaca 10 chapter pertama tiap judul (sisanya 403). Bila WTR-LAB sedang menolak pembaca otomatis, endpoint menjawab 502 dengan saran membuka chapter langsung di situsnya; coba lagi beberapa saat lagi.",
     params: [
       { name: "slug", required: true, description: "raw_id, slug, atau URL novel/chapter WTR-LAB.", example: "106254" },
       { name: "chapter", description: "Nomor chapter. Bila kosong, dipakai dari URL atau chapter 1.", example: "1" },

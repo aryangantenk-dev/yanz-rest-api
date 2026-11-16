@@ -10,6 +10,8 @@ export type ProxyOpts = {
   accept?: string;
   /** Kirim sebagai POST dengan isi ini (JSON mentah). Tanpa ini permintaan tetap GET. */
   body?: string;
+  /** Cookie yang ditempelkan perantara ke permintaan sumber. */
+  cookie?: string;
   referer?: string;
   origin?: boolean;
   xhr?: boolean;
@@ -19,7 +21,7 @@ export type ProxyOpts = {
   /** Nama perantara di pesan galat. */
   label?: string;
 };
-export type ProxyResult = { status: number; finalUrl: string; type: string; text: string };
+export type ProxyResult = { status: number; finalUrl: string; type: string; text: string; setCookie: string };
 
 const ENV_URL = "SANKA_PROXY_URL";
 const ENV_KEY = "SANKA_PROXY_KEY";
@@ -37,6 +39,7 @@ export async function viaProxy(url: string, opts: ProxyOpts = {}): Promise<Proxy
   const qs = new URLSearchParams({ url });
   if (opts.accept) qs.set("accept", opts.accept);
   if (opts.body) qs.set("body", opts.body);
+  if (opts.cookie) qs.set("cookie", opts.cookie);
   if (opts.referer) qs.set("referer", opts.referer);
   if (opts.origin) qs.set("origin", "1");
   if (opts.xhr) qs.set("xhr", "1");
@@ -63,5 +66,11 @@ export async function viaProxy(url: string, opts: ProxyOpts = {}): Promise<Proxy
     if (res.status === 504) throw new HttpError(504, "Situs sumber terlalu lama merespons.");
     throw new HttpError(502, `${label} gagal mengambil halaman sumber.`);
   }
-  return { status: res.status, finalUrl: res.headers.get("x-final-url") || url, type: res.headers.get("content-type") || "", text: await res.text() };
+  return {
+    status: res.status,
+    finalUrl: res.headers.get("x-final-url") || url,
+    type: res.headers.get("content-type") || "",
+    text: await res.text(),
+    setCookie: res.headers.get("x-set-cookie") || "",
+  };
 }

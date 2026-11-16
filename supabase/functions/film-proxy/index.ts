@@ -15,6 +15,7 @@ const ALLOW = (Deno.env.get("FILM_PROXY_ALLOW") ?? "sankavollerei.web.id,sankani
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const MAX_BYTES = 5 * 1024 * 1024;
 const SAFE_HEADER = /^[\w/+*.,;=\- ]{1,150}$/;
+const SAFE_COOKIE = /^[\w\-.=;:+/ ]{1,4000}$/;
 
 function allowed(raw: string): URL | null {
   let u: URL;
@@ -62,6 +63,9 @@ Deno.serve(async (req) => {
   if (q.get("xhr") === "1") headers["x-requested-with"] = "XMLHttpRequest";
   // jkt48.com: halamannya sendiri menyertakan X-Request-Id acak di tiap panggilan API.
   if (q.get("rid") === "1") headers["x-request-id"] = crypto.randomUUID();
+  // Cookie dari pemanggil (mis. hasil GET halaman sebelumnya) diteruskan apa adanya.
+  const cookie = q.get("cookie") ?? "";
+  if (cookie && SAFE_COOKIE.test(cookie)) headers["cookie"] = cookie;
 
   const body = q.get("body") ?? "";
   if (body.length > 8000) return reply(413, "body terlalu besar");
@@ -89,9 +93,17 @@ Deno.serve(async (req) => {
     if (!res) return reply(502, "gagal mengambil: terlalu banyak pengalihan");
     const buf = new Uint8Array(await res.arrayBuffer());
     if (buf.byteLength > MAX_BYTES) return reply(502, "gagal mengambil: respons terlalu besar");
+    // Cookie balasan diteruskan lewat header agar pemanggil bisa memakainya pada permintaan berikutnya.
+    const setCookie = (res.headers.getSetCookie?.() ?? [])
+      .map((c) => c.split(";")[0])
+      .join("; ")
+      .replace(/[^\w\-.=;:+/ ]/g, "")
+      .slice(0, 4000);
     return reply(res.status, buf, res.headers.get("content-type") ?? "application/octet-stream", {
       "x-final-url": target.href.slice(0, 500),
       "x-upstream-status": String(res.status),
+      "x-set-cookie": setCookie,
+      "access-control-expose-headers": "x-final-url,x-upstream-status,x-set-cookie",
     });
   } catch (e) {
     if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) return reply(504, "timeout");

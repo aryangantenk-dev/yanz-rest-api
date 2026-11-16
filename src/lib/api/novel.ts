@@ -300,6 +300,31 @@ async function proxyJson<T>(url: string, opts: Parameters<typeof viaProxy>[1]): 
   }
 }
 
+/**
+ * Cookie yang diterbitkan Cloudflare untuk IP server perantara. Perantara diblokir 403 pada
+ * POST /api/reader/get bila belum pernah membuka halaman lewat jalur yang sama, jadi halaman
+ * novel dibuka dulu dan cookie hasilnya dipakai pada panggilan berikutnya.
+ */
+let relayCookie = { value: "", at: 0 };
+
+async function relayWarm(url: string): Promise<void> {
+  const fresh = relayCookie.value && Date.now() - relayCookie.at < JAR_TTL;
+  const referer = `${BASE}/en`;
+  for (const target of fresh ? [] : [`${BASE}/en`, url]) {
+    const relay = await viaProxy(target, {
+      label: "Server perantara",
+      accept: "text/html,application/xhtml+xml,*/*;q=0.8",
+      referer,
+      cookie: relayCookie.value || undefined,
+      timeoutMs: 25000,
+    }).catch(() => null);
+    const setCookie = relay?.setCookie ?? "";
+    if (setCookie) {
+      relayCookie = { value: setCookie, at: Date.now() };
+    }
+  }
+}
+
 async function readerGet(referer: string, body: unknown): Promise<ReaderReply> {
   const notes: string[] = [];
   for (const variant of READER_VARIANTS) {
@@ -319,15 +344,25 @@ async function readerGet(referer: string, body: unknown): Promise<ReaderReply> {
   }
   // Vercel diblokir Cloudflare; server perantara (Supabase Edge Function) dipakai sebagai jalan lain.
   if (proxyConfigured()) {
-    const relay = await viaProxy(`${BASE}/api/reader/get`, {
-      label: "Server perantara",
-      accept: "application/json",
-      referer,
-      origin: true,
-      xhr: true,
-      body: JSON.stringify(body),
-      timeoutMs: 30000,
-    }).catch((e: unknown) => ({ status: e instanceof HttpError ? e.status : 0, text: "", type: "", finalUrl: "" }));
+    await relayWarm(referer).catch(() => undefined);
+    const call = () =>
+      viaProxy(`${BASE}/api/reader/get`, {
+        label: "Server perantara",
+        accept: "application/json",
+        referer,
+        origin: true,
+        xhr: true,
+        body: JSON.stringify(body),
+        cookie: relayCookie.value || undefined,
+        timeoutMs: 30000,
+      }).catch((e: unknown) => ({ status: e instanceof HttpError ? e.status : 0, text: "", type: "", finalUrl: "", setCookie: "" }));
+    let relay = await call();
+    // Cookie Cloudflare bisa kedaluwarsa: segarkan sekali lalu ulangi.
+    if (relay.status === 403) {
+      relayCookie = { value: "", at: 0 };
+      await relayWarm(referer).catch(() => undefined);
+      relay = await call();
+    }
     notes.push(`perantara: ${relay.status}`);
     if (relay.status >= 200 && relay.status < 300) {
       try {
@@ -391,7 +426,14 @@ async function chapterContent(rawId: number, slug: string, order: number) {
     const direct = await fetchJson<ContentReply>(contentUrl, { headers: apiHeaders(referer) }, 25000).catch(() => null);
     if (direct?.data) return direct;
     if (proxyConfigured()) {
-      const relay = await proxyJson<ContentReply>(contentUrl, { referer, origin: true, xhr: true, timeoutMs: 30000 }).catch(() => null);
+      await relayWarm(contentUrl).catch(() => undefined);
+      const relay = await proxyJson<ContentReply>(contentUrl, {
+        referer,
+        origin: true,
+        xhr: true,
+        cookie: relayCookie.value || undefined,
+        timeoutMs: 30000,
+      }).catch(() => null);
       if (relay?.data) return relay;
     }
     throw new HttpError(502, "Server sumber tidak mengirim isi chapter (diblokir atau sedang sibuk). Coba chapter lain atau ulangi nanti.");

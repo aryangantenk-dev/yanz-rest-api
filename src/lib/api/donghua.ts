@@ -15,7 +15,8 @@ const IMAGE_HOSTS = /(^|\.)anichin\.(ro|moe|com|id|net|xyz)$/i;
 
 const seriesUrl = (slug: string) => `${BASE}/anime/${encodeURIComponent(slug)}`;
 const episodeUrl = (slug: string) => `${BASE}/${encodeURIComponent(slug)}`;
-const searchUrl = (q: string, page: number) => `${BASE}/search?q=${encodeURIComponent(q)}${page > 1 ? `&page=${page}` : ""}`;
+// Anichin memakai ?s= untuk pencarian (bukan ?q=).
+const searchUrl = (q: string, page: number) => `${BASE}/search?s=${encodeURIComponent(q)}${page > 1 ? `&page=${page}` : ""}`;
 
 /** Path yang bukan seri maupun episode, supaya link seperti /genres/action tidak salah tebak. */
 const RESERVED = new Set([
@@ -599,7 +600,12 @@ export const donghuaEndpoints: Endpoint[] = [
         })
         .get()
         .filter(Boolean);
-      const genres = found.length ? found : GENRE_OPTIONS.map((slug) => ({ slug, name: slug.replace(/-/g, " ") }));
+      // Daftar genre bisa muncul dua kali (panel filter + pilihan lanjutan): buang duplikat.
+      const unique = new Map<string, { slug: string; name: string }>();
+      for (const g of found) if (g && !unique.has(g.slug)) unique.set(g.slug, g);
+      const genres = unique.size
+        ? [...unique.values()].map((g) => ({ slug: g.slug, name: g.name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) }))
+        : GENRE_OPTIONS.map((slug) => ({ slug, name: slug.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) }));
       return { source: BASE, total: genres.length, genres };
     },
   },

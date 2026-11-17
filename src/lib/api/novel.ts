@@ -365,19 +365,6 @@ const CONTENT_SCRIPT = (contentUrl: string) => `(async () => {
   return { body: inner.body || [], terms: (inner.glossary_data && inner.glossary_data.terms) || [] };
 })()`;
 
-/** Halaman chapter di atas batas tamu menampilkan pemberitahuan "requires registration". */
-const LOGIN_WALL = /requires registration|guests can preview AI translation/i;
-
-/** Deteksi dinding login WTR-LAB (tamu hanya 10 chapter pertama tiap judul). */
-async function guestWallHit(pageUrl: string, tries = 2): Promise<boolean> {
-  for (let i = 0; i < tries; i++) {
-    if (i) await new Promise((r) => setTimeout(r, 1200));
-    const text = await renderEval(pageUrl, "document.body.innerText.slice(0, 800)").catch(() => null);
-    if (typeof text === "string" && LOGIN_WALL.test(text)) return true;
-  }
-  return false;
-}
-
 type RawContent = { body?: unknown; terms?: unknown };
 
 /** Isi chapter lengkap lewat perantara browser perender. */
@@ -685,25 +672,106 @@ function chapterTitleMatches(rendered: Rendered, rawTitle: string | undefined | 
   return hits / words.length >= 0.5;
 }
 
+/**
+ * Mode "Web" di WTR-LAB (tautan ?service=web) menyajikan terjemahan mesin biasa, dan isinya
+ * terbuka untuk tamu tanpa batas 10 chapter — berbeda dari mode "AI" yang dipagari pendaftaran.
+ * Kontainer isinya `.chapter-infinite-reader` dan baru terisi setelah JavaScript jalan.
+ */
+const WEB_SELECTOR = ".chapter-infinite-reader";
+
+/** Halaman chapter mode Web; `order: 0` berarti otomatis mengikuti parameter `order` pemanggil. */
+function webModeUrl(url: string): string {
+  return `${url}${url.includes("?") ? "&" : "?"}service=web`;
+}
+
+/** Ambil teks mode Web lewat perender browser, menunggu kontainernya terisi. */
+async function webModeText(pageUrl: string): Promise<string> {
+  const qs = new URLSearchParams({ url: webModeUrl(pageUrl), meta: "false", waitForSelector: WEB_SELECTOR });
+  qs.set("data.body.evaluate", `document.querySelector(${JSON.stringify(WEB_SELECTOR)})?.innerText || ""`);
+  const res = await fetch(`${RENDER_API}?${qs}`, {
+    headers: { accept: "application/json" },
+    cache: "no-store",
+    signal: AbortSignal.timeout(60000),
+  }).catch(() => null);
+  if (!res?.ok) throw new HttpError(502, "Perender tidak merespons.");
+  const payload = (await res.json().catch(() => null)) as { data?: { body?: unknown } } | null;
+  const text = typeof payload?.data?.body === "string" ? payload.data.body : "";
+  if (!text.trim()) throw new HttpError(502, "Isi mode Web tidak ditemukan.");
+  return text;
+}
+
+/**
+ * Isi mode Web kadang memuat beberapa chapter sekaligus (pembaca berjalan). Bagian yang bukan
+ * chapter yang diminta dibuang dengan memotong pada penanda "Chapter N" berikutnya.
+ */
+function splitWebChapter(text: string, order: number): { title: string | null; paragraphs: string[] } {
+  const lines = text.split("\n").map((l) => l.replace(/\s+/g, " ").trim());
+  const title: string | null = lines.find((l) => /^Chapter\s+\d+/i.test(l)) ?? null;
+  const paragraphs: string[] = [];
+  let started = false;
+  for (const line of lines) {
+    if (!line) continue;
+    if (BOILERPLATE.test(line)) continue;
+    if (/^(reading taiwanese novels|advertisement|ad blocker|translator|editor)[:：]/i.test(line)) continue;
+    const num = line.match(/^Chapter\s+(\d{1,6})\b/i);
+    if (num) {
+      if (started) break; // chapter berikutnya: hentikan
+      const n = Number(num[1]);
+      if (n !== order) {
+        // Bagian lain di halaman ini; lewati sampai chapter yang diminta muncul.
+        continue;
+      }
+      started = true;
+      continue;
+    }
+    if (line.length < 2) continue;
+    paragraphs.push(tidy(line));
+    started = true;
+  }
+  // Bila penanda nomor tidak ketemu sama sekali, pakai semua baris teks.
+  if (!paragraphs.length) {
+    for (const line of lines) {
+      if (line && line.length > 1 && !BOILERPLATE.test(line)) paragraphs.push(tidy(line));
+    }
+  }
+  return { title, paragraphs };
+}
+
 /** Isi satu chapter: API situs lebih dulu, perender pihak ketiga bila diblokir. */
 async function chapterContent(rawId: number, slug: string, order: number) {
   const referer = chapterUrl(rawId, slug, order);
-  // Daftar chapter menyebut status kunci; chapter terkunci tidak perlu dicoba di jalur mana pun.
   const meta = await findChapter(rawId, order).catch(() => null);
-  if (meta?.locked) {
-    throw new HttpError(
-      403,
-      `Chapter ${order} terkunci di WTR-LAB (tamu hanya bisa membaca 10 chapter pertama setiap judul). Buka langsung di situsnya atau pakai akun yang sudah unlock.`,
-    );
-  }
 
-  // Tamu WTR-LAB hanya bisa membuka 10 chapter pertama; di atas itu situs menampilkan
-  // pemberitahuan pendaftaran, bukan isi chapter.
-  if (order > 10 && (await guestWallHit(referer, 1))) {
-    throw new HttpError(
-      403,
-      `Chapter ${order} butuh akun WTR-LAB. Tamu hanya bisa membuka 10 chapter pertama tiap judul (chapter 1-10); sisanya perlu login/unlock di wtr-lab.com.`,
-    );
+  // Jalur utama: mode Web yang terbuka untuk semua chapter (termasuk yang berstatus terkunci
+  // di mode AI). Kalau gagal, coba API mode AI, lalu perender markdown.
+  let webNote = "";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 1200));
+    try {
+      const text = await webModeText(referer);
+      const parsed = splitWebChapter(text, order);
+      if (parsed.paragraphs.length >= 3 && chapterTitleMatches({ ...parsed, declared: order }, meta?.title)) {
+        return {
+          raw_id: rawId,
+          slug,
+          chapter: order,
+          chapter_id: meta?.id ?? null,
+          title: tidy(meta?.title) || parsed.title || `Chapter ${order}`,
+          url: referer,
+          characters: parsed.paragraphs.join(" ").length,
+          paragraphs: parsed.paragraphs.length,
+          navigation: {
+            prev: order > 1 ? chapterUrl(rawId, slug, order - 1) : null,
+            next: chapterUrl(rawId, slug, order + 1),
+          },
+          source: "web",
+          content: parsed.paragraphs.join("\n\n"),
+        };
+      }
+      webNote = `isi ${parsed.paragraphs.length} paragraf`;
+    } catch (e) {
+      webNote = e instanceof HttpError ? `${e.status}: ${e.message}` : String(e);
+    }
   }
 
   let firstError: unknown = null;
@@ -711,41 +779,19 @@ async function chapterContent(rawId: number, slug: string, order: number) {
     return await chapterViaApi(rawId, slug, order);
   } catch (e) {
     firstError = e;
-    // Chapter terkunci/404 bukan soal blokir: jangan cari jalan lain.
-    if (e instanceof HttpError && (e.status === 404 || e.status === 403)) throw e;
+    if (e instanceof HttpError && e.status === 404) throw e;
   }
 
-  // Gagal baca di chapter ke-11 ke atas hampir selalu karena batas tamu WTR-LAB.
-  if (order > 10 && firstError instanceof HttpError && firstError.status >= 500) {
-    throw new HttpError(
-      403,
-      `Chapter ${order} butuh akun WTR-LAB. Tamu hanya bisa membuka 10 chapter pertama tiap judul (chapter 1-10); chapter lainnya perlu login/unlock di wtr-lab.com.`,
-    );
-  }
-
-  // Dua putaran percobaan; tiap perender punya kuota sendiri, jadi percobaan berlebihan justru
-  // menghabiskan kuota dan memperlambat jawaban.
   let rendered: Rendered | null = null;
-  let renderNote = "";
   for (let attempt = 0; attempt < 2 && !rendered; attempt++) {
     if (attempt) await new Promise((r) => setTimeout(r, 1200));
-    const candidate = await chapterViaRender(referer, order).catch((e: unknown) => {
-      renderNote = e instanceof HttpError ? `${e.status}: ${e.message}` : String(e);
-      return null;
-    });
-    // Perender bisa menyajikan bab lain: judul resmi chapter dicocokkan dengan isi yang tersaji.
-    if (candidate && candidate.paragraphs.length >= 3 && chapterTitleMatches(candidate, meta?.title)) {
-      rendered = candidate;
-    }
-    if (!rendered) {
-      const jinaUrl = attempt ? `${referer}${referer.includes("?") ? "&" : "?"}cb=${Date.now()}` : referer;
-      const alt = await chapterViaJina(jinaUrl, order).catch(() => null);
-      if (alt && chapterTitleMatches(alt, meta?.title)) rendered = alt;
-    }
+    const jinaUrl = attempt ? `${referer}${referer.includes("?") ? "&" : "?"}cb=${Date.now()}` : referer;
+    const alt = await chapterViaJina(jinaUrl, order).catch(() => null);
+    if (alt && alt.paragraphs.length >= 3 && chapterTitleMatches(alt, meta?.title)) rendered = alt;
   }
   if (!rendered) {
-    if (renderNote) console.warn(`[novel] perender gagal: ${renderNote}`);
-    throw firstError;
+    console.warn(`[novel] chapter ${order} gagal (mode Web: ${webNote})`);
+    throw firstError instanceof HttpError ? firstError : new HttpError(502, `Gagal memuat chapter ${order}.`);
   }
 
   return {
@@ -923,7 +969,7 @@ export const novelEndpoints: Endpoint[] = [
     slug: "chapter",
     kind: "json",
     title: "Baca Chapter Novel",
-    description: "Isi teks satu chapter novel (paragraf bahasa Inggris hasil terjemahan AI WTR-LAB) beserta navigasi chapter sebelum dan sesudahnya. Tamu WTR-LAB hanya bisa membaca 10 chapter pertama tiap judul (sisanya 403). Bila WTR-LAB sedang menolak pembaca otomatis, endpoint menjawab 502 dengan saran membuka chapter langsung di situsnya; coba lagi beberapa saat lagi.",
+    description: "Isi teks satu chapter novel (paragraf bahasa Inggris) beserta navigasi chapter sebelum dan sesudahnya. Semua chapter bisa dibaca, termasuk yang terkunci di mode AI: sumbernya mode \"Web\" WTR-LAB (terjemahan mesin) yang terbuka untuk tamu. Field `source` menyebut asal teks: web, api, atau render.",
     params: [
       { name: "slug", required: true, description: "raw_id, slug, atau URL novel/chapter WTR-LAB.", example: "106254" },
       { name: "chapter", description: "Nomor chapter. Bila kosong, dipakai dari URL atau chapter 1.", example: "1" },

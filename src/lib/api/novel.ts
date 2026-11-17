@@ -677,16 +677,22 @@ function chapterTitleMatches(rendered: Rendered, rawTitle: string | undefined | 
  * terbuka untuk tamu tanpa batas 10 chapter — berbeda dari mode "AI" yang dipagari pendaftaran.
  * Kontainer isinya `.chapter-infinite-reader` dan baru terisi setelah JavaScript jalan.
  */
+/**
+ * Isi mode Web dimuat bertahap: kontainer `.chapter-infinite-reader` muncul lebih dulu dengan
+ * kerangka UI, lalu paragraf chapter menyusul. Karena itu perender diminta menunggu paragraf
+ * pertama di dalam kontainer, bukan kontainernya saja.
+ */
 const WEB_SELECTOR = ".chapter-infinite-reader";
+const WEB_WAIT_SELECTOR = `${WEB_SELECTOR} p`;
 
-/** Halaman chapter mode Web; `order: 0` berarti otomatis mengikuti parameter `order` pemanggil. */
+/** Halaman chapter mode Web; menambah `?service=web` memilih terjemahan mesin yang terbuka untuk tamu. */
 function webModeUrl(url: string): string {
   return `${url}${url.includes("?") ? "&" : "?"}service=web`;
 }
 
-/** Ambil teks mode Web lewat perender browser, menunggu kontainernya terisi. */
+/** Ambil teks mode Web lewat perender browser, menunggu paragraf pertamanya muncul. */
 async function webModeText(pageUrl: string): Promise<string> {
-  const qs = new URLSearchParams({ url: webModeUrl(pageUrl), meta: "false", waitForSelector: WEB_SELECTOR });
+  const qs = new URLSearchParams({ url: webModeUrl(pageUrl), meta: "false", waitForSelector: WEB_WAIT_SELECTOR });
   qs.set("data.body.evaluate", `document.querySelector(${JSON.stringify(WEB_SELECTOR)})?.innerText || ""`);
   const res = await fetch(`${RENDER_API}?${qs}`, {
     headers: { accept: "application/json" },
@@ -706,35 +712,46 @@ async function webModeText(pageUrl: string): Promise<string> {
  */
 function splitWebChapter(text: string, order: number): { title: string | null; paragraphs: string[] } {
   const lines = text.split("\n").map((l) => l.replace(/\s+/g, " ").trim());
-  const title: string | null = lines.find((l) => /^Chapter\s+\d+/i.test(l)) ?? null;
+  // Judul resmi chapter ditandai "#<order>" di antarmuka mode Web.
+  const marker = new RegExp(`^#${order}\\s*chapter\\s+${order}\\b`, "i");
+  const anyMarker = /^#\d+\s*chapter\s+\d+/i;
+  const headingOf = (line: string): number | null => {
+    const m = line.match(/^#(\d{1,6})\s*chapter\s+(\d{1,6})/i);
+    return m ? Number(m[1]) : null;
+  };
+
+  // Baris UI yang menyertai penanda judul ("#50Chapter 50: ...") sekaligus judul resminya.
+  const titleLine = lines.find((l) => marker.test(l) || anyMarker.test(l)) ?? null;
+  const title = titleLine ? tidy(titleLine.replace(/^#\d+\s*/i, "")) : null;
+
+  const isChrome = (line: string) =>
+    BOILERPLATE.test(line) ||
+    /^(reading taiwanese novels|advertisement|ad blocker|translator|editor)[:：]/i.test(line) ||
+    /^(prev|next|home|novel)$/i.test(line) ||
+    /^web(\s*web\s*\+?\s*ai)?$/i.test(line) ||
+    /^ch\.\s*\d+\s*\/\s*\d+/i.test(line) ||
+    anyMarker.test(line);
+
   const paragraphs: string[] = [];
   let started = false;
   for (const line of lines) {
     if (!line) continue;
-    if (BOILERPLATE.test(line)) continue;
-    if (/^(reading taiwanese novels|advertisement|ad blocker|translator|editor)[:：]/i.test(line)) continue;
-    // Kerangka antarmuka pembaca (tombol, persentase, tab layanan) bukan isi chapter.
-    if (/^(prev|next|web|web\+|ai|home|novel)$/i.test(line)) continue;
-    if (/^ch\.\s*\d+\s*\/\s*\d+/i.test(line) || /^#\d+\s*chapter/i.test(line)) continue;
-    const num = line.match(/^Chapter\s+(\d{1,6})\b/i);
-    if (num) {
-      if (started) break; // chapter berikutnya: hentikan
-      const n = Number(num[1]);
-      if (n !== order) {
-        // Bagian lain di halaman ini; lewati sampai chapter yang diminta muncul.
-        continue;
-      }
+    // Penanda judul diperiksa sebelum penyaring UI: baris itu sendiri berbentuk "#50Chapter 50: ...".
+    const heading = headingOf(line);
+    if (heading !== null) {
+      if (started) break; // chapter berikutnya di halaman yang sama: hentikan
+      if (heading !== order) continue; // bagian chapter lain: lewati
       started = true;
       continue;
     }
+    if (isChrome(line)) continue;
     if (line.length < 2) continue;
     paragraphs.push(tidy(line));
     started = true;
   }
-  // Bila penanda nomor tidak ketemu sama sekali, pakai semua baris teks.
   if (!paragraphs.length) {
     for (const line of lines) {
-      if (line && line.length > 1 && !BOILERPLATE.test(line)) paragraphs.push(tidy(line));
+      if (line.length > 1 && !isChrome(line)) paragraphs.push(tidy(line));
     }
   }
   return { title, paragraphs };

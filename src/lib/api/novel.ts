@@ -713,6 +713,9 @@ function splitWebChapter(text: string, order: number): { title: string | null; p
     if (!line) continue;
     if (BOILERPLATE.test(line)) continue;
     if (/^(reading taiwanese novels|advertisement|ad blocker|translator|editor)[:：]/i.test(line)) continue;
+    // Kerangka antarmuka pembaca (tombol, persentase, tab layanan) bukan isi chapter.
+    if (/^(prev|next|web|web\+|ai|home|novel)$/i.test(line)) continue;
+    if (/^ch\.\s*\d+\s*\/\s*\d+/i.test(line) || /^#\d+\s*chapter/i.test(line)) continue;
     const num = line.match(/^Chapter\s+(\d{1,6})\b/i);
     if (num) {
       if (started) break; // chapter berikutnya: hentikan
@@ -745,12 +748,14 @@ async function chapterContent(rawId: number, slug: string, order: number) {
   // Jalur utama: mode Web yang terbuka untuk semua chapter (termasuk yang berstatus terkunci
   // di mode AI). Kalau gagal, coba API mode AI, lalu perender markdown.
   let webNote = "";
-  for (let attempt = 0; attempt < 2; attempt++) {
-    if (attempt) await new Promise((r) => setTimeout(r, 1200));
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 1500 * attempt));
     try {
       const text = await webModeText(referer);
       const parsed = splitWebChapter(text, order);
-      if (parsed.paragraphs.length >= 3 && chapterTitleMatches({ ...parsed, declared: order }, meta?.title)) {
+      const bodyLength = parsed.paragraphs.join(" ").length;
+      // Kerangka UI yang belum termuat penuh hanya menghasilkan puluhan karakter.
+      if (bodyLength >= 400 && parsed.paragraphs.length >= 3 && chapterTitleMatches({ ...parsed, declared: order }, meta?.title)) {
         return {
           raw_id: rawId,
           slug,
@@ -768,7 +773,7 @@ async function chapterContent(rawId: number, slug: string, order: number) {
           content: parsed.paragraphs.join("\n\n"),
         };
       }
-      webNote = `isi ${parsed.paragraphs.length} paragraf`;
+      webNote = `isi ${parsed.paragraphs.length} paragraf / ${bodyLength} karakter`;
     } catch (e) {
       webNote = e instanceof HttpError ? `${e.status}: ${e.message}` : String(e);
     }

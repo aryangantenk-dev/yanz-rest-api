@@ -45,11 +45,15 @@ type BuyState = { authEnabled: boolean; signedIn: boolean; needsUsername: boolea
 function BuyArea({ state, id, label, disabled, what, onBuy }: { state: BuyState; /** Penanda tombol ini di `state.busy`. */ id: string; label: string; disabled: boolean; /** Nama barangnya di dalam kalimat, misalnya "paket ini". */ what: string; onBuy: () => void }) {
   if (!state.authEnabled) return <p className="text-sm text-muted">Login belum diaktifkan di server ini, jadi {what} belum bisa dibeli.</p>;
   if (!state.signedIn) {
+    // Label penawaran tetap tampil supaya pengunjung melihat tawaran paketnya, bukan hanya ajakan masuk.
     return (
-      <Link href="/login?next=/paket" className="btn btn-primary w-full">
-        Masuk untuk membeli
-        <ArrowIcon />
-      </Link>
+      <>
+        <Link href="/login?next=/paket" className="btn btn-primary w-full">
+          {label}
+          <ArrowIcon />
+        </Link>
+        <p className="mt-2 text-sm text-muted">Perlu masuk dulu; akun dan API key gratis.</p>
+      </>
     );
   }
   if (state.needsUsername) {
@@ -494,7 +498,7 @@ export function PlanPanel({
           {current?.unlimited && !isAdmin && <p className="mt-2 text-sm text-muted">Paket {current.name} kamu sudah tanpa kuota harian, jadi limit ini baru terpakai setelah paketnya berakhir.</p>}
           <div className="mt-4">
             {isAdmin && <p className="mb-3 text-sm text-muted">Akun admin tidak terkena kuota harian, jadi limit yang dibeli tersimpan tetapi tidak terpakai.</p>}
-            <BuyArea state={buyState} id={LIMIT_PLAN} label="Beli limit dengan QRIS" disabled={!qtyOk} what="limit tambahan" onBuy={() => void buy(LIMIT_PLAN, { plan: LIMIT_PLAN, qty })} />
+            <BuyArea state={buyState} id={LIMIT_PLAN} label="Beli Kuota Abadi" disabled={!qtyOk} what="limit tambahan" onBuy={() => void buy(LIMIT_PLAN, { plan: LIMIT_PLAN, qty })} />
           </div>
         </div>
       </section>

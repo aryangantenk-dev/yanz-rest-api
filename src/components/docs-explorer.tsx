@@ -4,8 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import type { EndpointMeta } from "@/lib/api/types";
 import type { Category } from "@/lib/api/categories";
 import { colorizeJson } from "@/lib/highlight";
-import { buildSnippets } from "./code-tabs";
-import { CopyButton, useOrigin } from "./client-utils";
+import { useApiKey, withKey } from "./auth-client";
+import { buildSnippets, buildUploadSnippets } from "./code-tabs";
+import { CopyButton, LoadedImage, REDIRECT_FAILED, asksRedirect, loadImage, useOrigin } from "./client-utils";
 import { CategoryIcon, ChevronIcon, PlayIcon, SearchIcon } from "./icons";
 
 type Result = {
@@ -15,6 +16,8 @@ type Result = {
   type: string;
   text?: string;
   img?: string;
+  /** Gambar yang dimuat lewat pengalihan (redirect=1). */
+  el?: HTMLImageElement;
   video?: string;
   frame?: string;
   size?: number;
@@ -29,14 +32,22 @@ function scrollToEl(el: Element | null | undefined) {
   window.scrollTo({ top: Math.max(0, top), behavior: calm ? "auto" : "smooth" });
 }
 
-function EndpointCard({ e, fallback, forceOpen }: { e: EndpointMeta; fallback: string; forceOpen: boolean }) {
+/** Blokir yang sedang berlaku: kunci "kategori/slug" atau "kategori/*", nilainya alasan dari admin (boleh kosong). */
+type Blocks = Record<string, string>;
+
+/** `blocked` berisi alasan dari admin (boleh kosong) bila endpoint ini sedang dinonaktifkan. */
+function EndpointCard({ e, fallback, forceOpen, keyRequired, blocked }: { e: EndpointMeta; fallback: string; forceOpen: boolean; keyRequired: boolean; blocked?: string }) {
   const id = `${e.category}-${e.slug}`;
   const origin = useOrigin(fallback);
+  // `apiKey` dikirim bersama permintaan; `shownKey` tampil di URL dan contoh kode (teks pengganti bila belum ada key).
+  const { key: apiKey, shown: shownKey } = useApiKey(keyRequired);
   const [open, setOpen] = useState(false);
   // Isi playground baru dipasang saat kartu pertama kali dibuka agar halaman dengan ratusan kartu tetap ringan.
   const [mounted, setMounted] = useState(false);
   const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(e.params.map((p) => [p.name, p.example ?? ""])));
   const [touched, setTouched] = useState<Record<string, boolean>>({});
+  /** Berkas yang dipilih, untuk endpoint yang menerima unggahan. */
+  const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [res, setRes] = useState<Result | null>(null);
   const [tab, setTab] = useState<"respons" | "kode">("respons");
@@ -74,43 +85,92 @@ function EndpointCard({ e, fallback, forceOpen }: { e: EndpointMeta; fallback: s
     return s ? `?${s}` : "";
   }, [e.params, values]);
 
-  const fullUrl = `${origin}${e.path}${query}`;
+  const fullUrl = withKey(`${origin}${e.path}${query}`, shownKey);
   const missing = e.params.filter((p) => p.required && !values[p.name]?.trim());
 
-  const send = useCallback(async () => {
-    setLoading(true);
-    setTab("respons");
-    const t0 = performance.now();
-    try {
-      const r = await fetch(`${e.path}${query}`);
-      const type = r.headers.get("content-type") ?? "";
+  /** Lepaskan blob gambar sebelumnya supaya memorinya tidak menumpuk. */
+  const forget = useCallback(() => {
+    if (imgRef.current) {
+      URL.revokeObjectURL(imgRef.current);
+      imgRef.current = null;
+    }
+  }, []);
+
+  /**
+   * Tampilkan respons sesuai jenis isinya. Endpoint image/video (hapus latar, stiker, ssweb)
+   * mengirim data biner; isinya harus dibaca sebagai blob lalu ditampilkan sebagai gambar.
+   * Bila dibaca sebagai teks, yang muncul deretan karakter rusak seperti "PNG IHRDR…".
+   */
+  const showResponse = useCallback(
+    async (r: Response, t0: number, frameUrl?: string) => {
+      const type = (r.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
       const ms = Math.round(performance.now() - t0);
-      if (imgRef.current) {
-        URL.revokeObjectURL(imgRef.current);
-        imgRef.current = null;
+      forget();
+      if (r.type === "opaqueredirect") {
+        setRes({ ok: false, status: 302, ms, type: "", error: REDIRECT_FAILED });
+        return;
       }
       if (type.startsWith("image/") || type.startsWith("video/")) {
         const blob = await r.blob();
         const src = URL.createObjectURL(blob);
         imgRef.current = src;
         setRes({ ok: r.ok, status: r.status, ms, type, ...(type.startsWith("video/") ? { video: src } : { img: src }), size: blob.size });
-      } else {
-        const raw = await r.text();
-        let text = raw;
-        try {
-          text = JSON.stringify(JSON.parse(raw), null, 2);
-        } catch {
-          /* bukan JSON */
-        }
-        const frame = r.ok && type.startsWith("text/html") ? `${e.path}${query}` : undefined;
-        setRes({ ok: r.ok, status: r.status, ms, type, text, frame, size: raw.length });
+        return;
       }
+      const raw = await r.text();
+      let text = raw;
+      try {
+        text = JSON.stringify(JSON.parse(raw), null, 2);
+      } catch {
+        /* bukan JSON: tampilkan apa adanya */
+      }
+      const frame = frameUrl && r.ok && type.startsWith("text/html") ? frameUrl : undefined;
+      setRes({ ok: r.ok, status: r.status, ms, type, text, frame, size: raw.length });
+    },
+    [forget],
+  );
+
+  const send = useCallback(async () => {
+    setLoading(true);
+    setTab("respons");
+    const t0 = performance.now();
+    if (keyRequired && !apiKey) {
+      setRes({ ok: false, status: 0, ms: 0, type: "", error: "API key belum diisi. Masuk untuk mendapat API key gratis, atau tempel API key kamu di kolom API key di bagian atas halaman ini." });
+      setLoading(false);
+      return;
+    }
+    const url = withKey(`${e.path}${query}`, apiKey);
+    try {
+      if (e.upload && file) {
+        forget();
+        if (file.size > e.upload.maxBytes) {
+          setRes({ ok: false, status: 0, ms: 0, type: "", error: `Berkas terlalu besar: maksimal ${Math.round(e.upload.maxBytes / 1024 / 1024)} MB.` });
+          return;
+        }
+        const form = new FormData();
+        form.append(e.upload.field, file);
+        const r = await fetch(withKey(e.path, apiKey), { method: "POST", body: form });
+        // Hasil endpoint image bisa berupa PNG biner: jangan dibaca sebagai teks.
+        await showResponse(r, t0);
+        return;
+      }
+      if (asksRedirect(url)) {
+        const el = await loadImage(url, `Hasil ${e.title}`, "max-h-80 max-w-full border border-codeline bg-white/5");
+        if (el) {
+          forget();
+          setRes({ ok: true, status: 302, ms: Math.round(performance.now() - t0), type: "", el });
+          return;
+        }
+        // Gambar tidak termuat: ambil jawaban API-nya supaya pesan galatnya bisa ditampilkan.
+      }
+      const r = await fetch(url, { redirect: "manual" });
+      await showResponse(r, t0, url);
     } catch {
       setRes({ ok: false, status: 0, ms: Math.round(performance.now() - t0), type: "", error: "Tidak dapat terhubung ke server. Periksa koneksimu, lalu kirim lagi." });
     } finally {
       setLoading(false);
     }
-  }, [e.path, query]);
+  }, [apiKey, e.path, e.title, e.upload, file, keyRequired, query, showResponse, forget]);
 
   const onSubmit = (ev: FormEvent) => {
     ev.preventDefault();
@@ -125,7 +185,10 @@ function EndpointCard({ e, fallback, forceOpen }: { e: EndpointMeta; fallback: s
     void send();
   };
 
-  const snippets = buildSnippets(fullUrl);
+  // Endpoint unggahan: contoh POST ditampilkan bila berkas dipilih atau belum ada parameter yang diisi.
+  const posting = !!e.upload && (!!file || !query);
+  const snippets = e.upload && posting ? buildUploadSnippets(withKey(`${origin}${e.path}`, shownKey), e.upload.field) : buildSnippets(fullUrl);
+  const shownUrl = e.upload && file ? withKey(`${origin}${e.path}`, shownKey) : fullUrl;
 
   return (
     <article ref={ref} id={id} className={`scroll-mt-36 border bg-card transition-colors duration-150 ${isOpen ? "border-control" : "border-line hover:border-control"}`}>
@@ -141,11 +204,12 @@ function EndpointCard({ e, fallback, forceOpen }: { e: EndpointMeta; fallback: s
           }}
           className="flex min-h-14 w-full items-start gap-3 p-3 text-left sm:gap-4 sm:p-4"
         >
-          <span className="mt-0.5 shrink-0 font-mono text-sm font-bold text-ok">GET</span>
+          <span className="mt-0.5 shrink-0 font-mono text-sm font-bold text-ok">{e.upload ? "GET/POST" : "GET"}</span>
           <span className="min-w-0 flex-1">
             <span className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
               <span className="text-base font-semibold">{e.title}</span>
               <code className="wrap-anywhere font-mono text-sm text-muted">{e.path}</code>
+              {blocked !== undefined && <span className="border border-danger px-1.5 font-mono text-xs font-semibold text-danger">Nonaktif</span>}
             </span>
             <span className="mt-1 block text-sm text-muted">{e.description}</span>
           </span>
@@ -159,6 +223,35 @@ function EndpointCard({ e, fallback, forceOpen }: { e: EndpointMeta; fallback: s
           <div className="grid grid-cols-1 border-t border-line lg:grid-cols-2">
             {/* kiri: parameter */}
             <form onSubmit={onSubmit} noValidate className="min-w-0 space-y-5 p-4 sm:p-5">
+              {blocked !== undefined && (
+                <p role="note" className="wrap-anywhere border border-danger p-3 text-sm font-medium text-danger">
+                  Endpoint ini sedang dinonaktifkan oleh admin{blocked ? `. Alasan: ${blocked.replace(/[.\s]+$/, "")}` : ""}. Permintaan ke sini dijawab 503 sampai endpoint diaktifkan lagi.
+                </p>
+              )}
+              {e.upload && (
+                <div>
+                  <label htmlFor={`${id}-file`} className="flex flex-wrap items-center gap-2">
+                    <code className="font-mono text-sm font-bold">{e.upload.field}</code>
+                    <span className="text-xs text-muted">berkas, lewat POST</span>
+                  </label>
+                  <p id={`${id}-file-help`} className="mt-1 text-sm text-muted">
+                    {e.upload.description}
+                  </p>
+                  <input
+                    id={`${id}-file`}
+                    type="file"
+                    accept={e.upload.accept}
+                    aria-describedby={`${id}-file-help`}
+                    onChange={(ev) => setFile(ev.target.files?.[0] ?? null)}
+                    className="field mt-2 h-auto py-2 file:mr-3 file:border-0 file:bg-subtle file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-fg"
+                  />
+                  {file && (
+                    <p className="mt-1 text-sm text-muted">
+                      Berkas ini yang dikirim; parameter di bawah diabaikan.
+                    </p>
+                  )}
+                </div>
+              )}
               {e.params.length ? (
                 <fieldset className="space-y-4">
                   <legend className="text-sm font-semibold">Parameter query</legend>
@@ -223,8 +316,8 @@ function EndpointCard({ e, fallback, forceOpen }: { e: EndpointMeta; fallback: s
               )}
 
               <div className="flex items-center border border-line bg-bg">
-                <code className="wrap-anywhere min-w-0 flex-1 px-3 py-2 font-mono text-sm text-muted">{fullUrl}</code>
-                <CopyButton text={fullUrl} label="URL" />
+                <code className="wrap-anywhere min-w-0 flex-1 px-3 py-2 font-mono text-sm text-muted">{shownUrl}</code>
+                <CopyButton text={shownUrl} label="URL" />
               </div>
 
               <button type="submit" disabled={loading} className="btn btn-primary w-full sm:w-auto">
@@ -301,6 +394,13 @@ function EndpointCard({ e, fallback, forceOpen }: { e: EndpointMeta; fallback: s
                   <p className="font-sans text-base text-codemuted">Respons muncul di sini setelah kamu menekan &ldquo;Kirim permintaan&rdquo;.</p>
                 ) : res.error ? (
                   <p className="enter font-sans text-base text-codedanger">{res.error}</p>
+                ) : res.el ? (
+                  <div>
+                    <LoadedImage el={res.el} />
+                    <p className="tnum mt-3 text-codemuted">
+                      Dialihkan ke berkas gambar · {res.el.naturalWidth} × {res.el.naturalHeight} px
+                    </p>
+                  </div>
                 ) : res.img ? (
                   <div className="enter">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -343,9 +443,38 @@ function EndpointCard({ e, fallback, forceOpen }: { e: EndpointMeta; fallback: s
   );
 }
 
-export function DocsExplorer({ endpoints, categories, fallback, showGroupHeadings = true }: { endpoints: EndpointMeta[]; categories: Category[]; fallback: string; showGroupHeadings?: boolean }) {
+export function DocsExplorer({
+  endpoints,
+  categories,
+  fallback,
+  showGroupHeadings = true,
+  keyRequired = false,
+}: {
+  endpoints: EndpointMeta[];
+  categories: Category[];
+  fallback: string;
+  showGroupHeadings?: boolean;
+  /** Endpoint menolak permintaan tanpa API key: sertakan key di setiap permintaan dan contoh. */
+  keyRequired?: boolean;
+}) {
   const [q, setQ] = useState("");
   const input = useRef<HTMLInputElement>(null);
+  const [blocks, setBlocks] = useState<Blocks>({});
+
+  // Endpoint yang sedang dinonaktifkan admin. Bila daftar ini gagal dimuat, kartu tampil seperti biasa.
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/status", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { blocked?: { path?: string; reason?: string }[] } | null) => {
+        if (!alive || !Array.isArray(d?.blocked) || d.blocked.length === 0) return;
+        setBlocks(Object.fromEntries(d.blocked.filter((b) => typeof b.path === "string").map((b) => [String(b.path).replace(/^\/api\//, ""), b.reason || ""])));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     const on = (ev: KeyboardEvent) => {
@@ -457,7 +586,7 @@ export function DocsExplorer({ endpoints, categories, fallback, showGroupHeading
             const cards = (
               <div className="space-y-2">
                 {items.map((e) => (
-                  <EndpointCard key={e.path} e={e} fallback={fallback} forceOpen={!!term && filtered.length === 1} />
+                  <EndpointCard key={e.path} e={e} fallback={fallback} forceOpen={!!term && filtered.length === 1} keyRequired={keyRequired} blocked={blocks[`${e.category}/${e.slug}`] ?? blocks[`${e.category}/*`]} />
                 ))}
               </div>
             );

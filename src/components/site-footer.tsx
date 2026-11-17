@@ -1,7 +1,10 @@
+import { SITE_PITCH, WHATSAPP_CHANNEL_NAME, WHATSAPP_CHANNEL_URL } from "@/lib/site";
 import Link from "next/link";
 import { categories } from "@/lib/api/categories";
+import { KEY_REQUIRED } from "@/lib/auth/config";
 import { RATE_LIMIT } from "@/lib/limits";
-import { LogoMark } from "./icons";
+import { FREE_PLAN, formatNumber } from "@/lib/plans";
+import { ChannelIcon, LogoMark } from "./icons";
 
 const linkClass = "inline-flex min-h-11 items-center text-muted transition-colors duration-150 hover:text-fg sm:min-h-8";
 
@@ -17,8 +20,18 @@ export function SiteFooter({ total }: { total: number }) {
             </span>
           </Link>
           <p className="mt-4 max-w-[45ch] text-sm text-muted">
-            {`REST API gratis tanpa API key untuk developer, pelajar, dan pembuat bot. ${total} endpoint, respons JSON konsisten, dan CORS terbuka.`}
+            {`REST API ${SITE_PITCH} untuk developer, pelajar, dan pembuat bot. ${total} endpoint, respons JSON konsisten, dan CORS terbuka.`}
           </p>
+          <a
+            href={WHATSAPP_CHANNEL_URL}
+            target="_blank"
+            rel="noopener"
+            className="mt-4 inline-flex min-h-11 items-center gap-2 rounded-full border border-line px-4 text-sm font-medium text-fg transition-colors duration-150 hover:border-ok hover:text-ok sm:min-h-9"
+          >
+            <ChannelIcon />
+            Ikuti saluran WhatsApp
+            <span className="sr-only">({WHATSAPP_CHANNEL_NAME}, terbuka di tab baru)</span>
+          </a>
         </div>
 
         <nav aria-label="Kategori API" className="md:col-span-4">
@@ -38,12 +51,16 @@ export function SiteFooter({ total }: { total: number }) {
           <h2 className="text-sm font-semibold">Sumber</h2>
           <ul className="mt-3 text-sm">
             <li><Link href="/docs" className={linkClass}>Dokumentasi lengkap</Link></li>
+            <li><Link href="/dashboard" className={linkClass}>Dashboard</Link></li>
+            <li><Link href="/dashboard/api-key" className={linkClass}>API key</Link></li>
+            <li><Link href="/paket" className={linkClass}>Paket</Link></li>
             <li>
               {/* /api adalah route handler yang mengembalikan JSON, bukan halaman, jadi dibuka dengan navigasi biasa. */}
               {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
               <a href="/api" className={linkClass}>Indeks endpoint (JSON)</a>
             </li>
             <li><Link href="/#mulai" className={linkClass}>Cara pakai</Link></li>
+            <li><Link href="/#contoh" className={linkClass}>Contoh web</Link></li>
             <li><Link href="/#faq" className={linkClass}>Pertanyaan umum</Link></li>
           </ul>
         </nav>
@@ -51,7 +68,9 @@ export function SiteFooter({ total }: { total: number }) {
       <div className="border-t border-line">
         <div className="mx-auto flex max-w-6xl flex-col gap-1 px-4 py-5 text-sm text-muted sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <p>© {new Date().getFullYear()} yanz.api</p>
-          <p className="tnum">Batas {RATE_LIMIT} permintaan per menit untuk setiap IP</p>
+          <p className="tnum">
+            {KEY_REQUIRED ? `Paket ${FREE_PLAN.name}: ${formatNumber(FREE_PLAN.daily)} permintaan per hari, ${RATE_LIMIT} per menit untuk setiap IP` : `Batas ${RATE_LIMIT} permintaan per menit untuk setiap IP`}
+          </p>
         </div>
       </div>
     </footer>

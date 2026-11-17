@@ -2,7 +2,9 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { colorizeJson } from "@/lib/highlight";
-import { CopyButton, useOrigin } from "./client-utils";
+import Link from "next/link";
+import { useApiKey, withKey } from "./auth-client";
+import { CopyButton, LoadedImage, REDIRECT_FAILED, asksRedirect, loadImage, useOrigin } from "./client-utils";
 import { PlayIcon } from "./icons";
 
 export type ConsoleEndpoint = {
@@ -18,6 +20,7 @@ type Result =
   | { kind: "image"; status: number; ok: boolean; ms: number; type: string; src: string }
   | { kind: "video"; status: number; ok: boolean; ms: number; type: string; src: string }
   | { kind: "html"; status: number; ok: boolean; ms: number; type: string; href: string }
+  | { kind: "redirect"; status: number; ok: boolean; ms: number; type: string; el: HTMLImageElement }
   | { kind: "error"; message: string };
 
 const MAX_CHARS = 20000;
@@ -27,7 +30,14 @@ const MAX_SUGGEST = 7;
 async function request(target: string, signal: AbortSignal): Promise<Result | null> {
   const t0 = performance.now();
   try {
-    const r = await fetch(`/api/${target}`, { signal });
+    if (asksRedirect(target)) {
+      const el = await loadImage(`/api/${target}`, "Gambar hasil permintaan", "max-h-72 max-w-full border border-codeline", signal);
+      if (signal.aborted) return null;
+      if (el) return { kind: "redirect", status: 302, ok: true, ms: Math.round(performance.now() - t0), type: "dialihkan ke berkas gambar", el };
+      // Gambar tidak termuat: ambil jawaban API-nya supaya pesan galatnya bisa ditampilkan.
+    }
+    const r = await fetch(`/api/${target}`, { signal, redirect: "manual" });
+    if (r.type === "opaqueredirect") return { kind: "error", message: REDIRECT_FAILED };
     const type = (r.headers.get("content-type") ?? "").split(";")[0];
     const ms = Math.round(performance.now() - t0);
     if (type.startsWith("image/") || type.startsWith("video/")) {
@@ -57,8 +67,23 @@ async function request(target: string, signal: AbortSignal): Promise<Result | nu
  * Konsol di beranda: cari endpoint, kirim permintaan sungguhan, dan baca responsnya.
  * Sebelum ada permintaan, yang tampil adalah contoh statis dan diberi label "contoh".
  */
-export function TryConsole({ endpoints, picks, fallback, sample }: { endpoints: ConsoleEndpoint[]; picks: ConsoleEndpoint[]; fallback: string; sample: string }) {
+export function TryConsole({
+  endpoints,
+  picks,
+  fallback,
+  sample,
+  keyRequired = false,
+}: {
+  endpoints: ConsoleEndpoint[];
+  picks: ConsoleEndpoint[];
+  fallback: string;
+  sample: string;
+  /** Endpoint menolak permintaan tanpa API key. */
+  keyRequired?: boolean;
+}) {
   const origin = useOrigin(fallback);
+  const { key: apiKey, shown: shownKey, auth } = useApiKey(keyRequired);
+  const needsLogin = keyRequired && auth.status !== "loading" && !apiKey;
   const uid = useId();
   const listId = `${uid}-list`;
   const inputRef = useRef<HTMLInputElement>(null);
@@ -89,17 +114,25 @@ export function TryConsole({ endpoints, picks, fallback, sample }: { endpoints: 
   const showList = listOpen && matches.length > 0;
 
   const clean = value.trim().replace(/^\/+/, "").replace(/^api\//, "");
-  const fullUrl = `${origin}/api/${clean}`;
+  const fullUrl = withKey(`${origin}/api/${clean}`, shownKey);
 
   async function send(pathOverride?: string) {
     const target = (pathOverride ?? clean).trim();
     if (!target) return;
+    if (keyRequired && !apiKey && !/[?&]apikey=/.test(target)) {
+      abortRef.current?.abort();
+      abortRef.current = null;
+      setListOpen(false);
+      setLoading(false);
+      setRes({ kind: "error", message: "Permintaan ini butuh API key. Masuk dulu untuk mendapat API key gratis; setelah itu konsol ini memakainya secara otomatis." });
+      return;
+    }
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setListOpen(false);
     setLoading(true);
-    const next = await request(target, ctrl.signal);
+    const next = await request(withKey(target, apiKey), ctrl.signal);
     if (abortRef.current !== ctrl) {
       // Sudah digantikan permintaan yang lebih baru: buang hasil ini.
       if (next?.kind === "image" || next?.kind === "video") URL.revokeObjectURL(next.src);
@@ -241,6 +274,22 @@ export function TryConsole({ endpoints, picks, fallback, sample }: { endpoints: 
             </button>
           ))}
         </div>
+
+        {keyRequired && (
+          <p className="mt-3 min-h-6 text-sm text-muted">
+            {needsLogin ? (
+              <>
+                Butuh API key.{" "}
+                <Link href="/login?next=/" className="link font-medium text-fg">
+                  Masuk untuk mendapat API key gratis
+                </Link>
+                , lalu konsol ini langsung bisa dipakai.
+              </>
+            ) : apiKey ? (
+              "API key kamu disertakan otomatis di setiap permintaan dari konsol ini."
+            ) : null}
+          </p>
+        )}
       </form>
 
       <div className="bg-code text-codefg">
@@ -265,6 +314,8 @@ export function TryConsole({ endpoints, picks, fallback, sample }: { endpoints: 
           ) : res.kind === "image" ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={res.src} alt="Gambar hasil permintaan" className="enter max-h-full max-w-full border border-codeline" />
+          ) : res.kind === "redirect" ? (
+            <LoadedImage el={res.el} />
           ) : res.kind === "video" ? (
             <video src={res.src} controls playsInline aria-label="Video hasil permintaan" className="enter max-h-full max-w-full border border-codeline bg-black" />
           ) : res.kind === "html" ? (

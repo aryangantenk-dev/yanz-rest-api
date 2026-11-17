@@ -1,8 +1,12 @@
 import { ImageResponse } from "next/og";
 import { endpoints } from "@/lib/api/registry";
+import { KEY_REQUIRED } from "@/lib/auth/config";
+import { BRAND_DOMAIN } from "@/lib/brand";
+import { SHARE_IMAGE_ALT } from "@/lib/seo";
 import { SITE_NAME } from "@/lib/site";
 
-export const alt = `${SITE_NAME} — REST API Gratis Tanpa API Key`;
+// Teks pengganti gambar pratinjau tautan (og:image:alt dan twitter:image:alt).
+export const alt = SHARE_IMAGE_ALT;
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -27,12 +31,13 @@ export default function OgImage() {
           <div style={{ fontSize: 36, fontWeight: 700, display: "flex" }}>{SITE_NAME}</div>
         </div>
         <div style={{ display: "flex", flexDirection: "column" }}>
-          <div style={{ fontSize: 84, fontWeight: 800, lineHeight: 1.05, letterSpacing: -2, display: "flex", flexWrap: "wrap" }}>{endpoints.length} endpoint REST API. Gratis, tanpa API key.</div>
-          <div style={{ marginTop: 28, fontSize: 30, color: muted, display: "flex" }}>AI, downloader, canvas, data BMKG, Al-Qur&apos;an, komik, anime, dan film dalam satu base URL.</div>
+          <div style={{ fontSize: 84, fontWeight: 800, lineHeight: 1.05, letterSpacing: -2, display: "flex", flexWrap: "wrap" }}>{endpoints.length} endpoint REST API. {KEY_REQUIRED ? "Gratis, cukup satu API key." : "Gratis, tanpa API key."}</div>
+          <div style={{ marginTop: 28, fontSize: 30, color: muted, display: "flex" }}>AI, downloader, canvas, data BMKG, Al-Qur&apos;an, komik, anime, film, dan JKT48 dalam satu base URL.</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", borderTop: `2px solid ${line}`, paddingTop: 28, fontSize: 28 }}>
           <div style={{ display: "flex", color: greenText, fontWeight: 700, marginRight: 18 }}>GET</div>
           <div style={{ display: "flex" }}>/api/random/quote</div>
+          <div style={{ display: "flex", marginLeft: "auto", fontWeight: 700 }}>{BRAND_DOMAIN}</div>
         </div>
       </div>
     ),

@@ -19,3 +19,10 @@ export const bannedIps = pgTable("banned_ips", {
   reason: text("reason").notNull().default(""),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
+
+/** Endpoint yang dinonaktifkan admin. `path` berisi "kategori/slug", atau "kategori/*" untuk satu kategori penuh. */
+export const blockedEndpoints = pgTable("blocked_endpoints", {
+  path: varchar("path", { length: 120 }).primaryKey(),
+  reason: text("reason").notNull().default(""),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});

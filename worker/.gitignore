@@ -1,0 +1,7 @@
+.env
+.venv/
+.data/
+.models/
+.browsers/
+__pycache__/
+.requirements.noocr.txt

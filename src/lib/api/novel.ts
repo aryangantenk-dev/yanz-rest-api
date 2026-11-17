@@ -325,6 +325,57 @@ async function relayWarm(url: string): Promise<void> {
   }
 }
 
+/*
+  Perantara lewat browser perender: Cloudflare menerima permintaan yang datang dari konteks
+  halaman WTR-LAB sendiri (bukan dari IP server kita). Rantai reader/get + content_url
+  dijalankan di dalam halaman, dan hasilnya dikirim balik sebagai JSON kecil.
+*/
+const RENDER_UA = browserHeaders(REFERER)["user-agent"];
+
+/** Jalankan potongan JS di halaman WTR-LAB lewat perender browser; hasilnya nilai balik skrip. */
+async function renderEval(url: string, script: string, timeoutMs = 55000): Promise<unknown> {
+  const qs = new URLSearchParams({ url, meta: "false" });
+  qs.set("data.out.evaluate", script);
+  const res = await fetch(`${RENDER_API}?${qs}`, {
+    headers: { accept: "application/json" },
+    cache: "no-store",
+    signal: AbortSignal.timeout(timeoutMs),
+  }).catch(() => null);
+  if (!res?.ok) throw new HttpError(502, "Perender tidak merespons.");
+  const payload = (await res.json().catch(() => null)) as { data?: { out?: unknown } } | null;
+  return payload?.data?.out ?? null;
+}
+
+const READER_SCRIPT = (body: string) => `(async () => {
+  const r = await fetch("/api/reader/get", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(${body}),
+  });
+  const j = await r.json().catch(() => null);
+  return j ? j : { success: false, error: "jawaban reader/get tidak terbaca" };
+})()`;
+
+/** content_url + glossary + paragraf, dijalankan di dalam halaman supaya ikut konteks browser. */
+const CONTENT_SCRIPT = (contentUrl: string) => `(async () => {
+  const r = await fetch(${JSON.stringify(contentUrl)});
+  const j = await r.json().catch(() => null);
+  const inner = j && j.data && j.data.data ? j.data.data : null;
+  if (!inner) return null;
+  return { body: inner.body || [], terms: (inner.glossary_data && inner.glossary_data.terms) || [] };
+})()`;
+
+type RawContent = { body?: unknown; terms?: unknown };
+
+/** Isi chapter lengkap lewat perantara browser perender. */
+async function contentViaRender(pageUrl: string, contentUrl: string): Promise<RawContent | null> {
+  const direct = await renderEval(pageUrl, CONTENT_SCRIPT(contentUrl)).catch(() => null);
+  if (direct && typeof direct === "object" && Array.isArray((direct as RawContent).body)) {
+    return direct as RawContent;
+  }
+  return null;
+}
+
 async function readerGet(referer: string, body: unknown): Promise<ReaderReply> {
   const notes: string[] = [];
   for (const variant of READER_VARIANTS) {
@@ -372,6 +423,15 @@ async function readerGet(referer: string, body: unknown): Promise<ReaderReply> {
       }
     }
   }
+  // Jalan terakhir: jalankan panggilan API dari dalam halaman WTR-LAB lewat browser perender.
+  const relayed = await renderEval(referer, READER_SCRIPT(JSON.stringify(body))).catch(() => null);
+  if (relayed && typeof relayed === "object") {
+    const reply = relayed as ReaderReply;
+    if (reply.success) return reply;
+    notes.push(`perender: ${reply.code || reply.error || "ditolak"}`);
+    if (reply.code === "CHAPTER_LOCKED" || reply.requireTurnstile) return reply;
+  }
+
   console.warn(`[novel] reader/get ditolak WTR-LAB: ${notes.join(", ")}`);
   throw new HttpError(
     502,
@@ -446,6 +506,9 @@ async function chapterViaApi(rawId: number, slug: string, order: number) {
       }).catch(() => null);
       if (relay?.data) return relay;
     }
+    // Isi chapter yang didapat lewat konteks browser juga harus diambil dari konteks itu.
+    const rendered = await contentViaRender(referer, contentUrl).catch(() => null);
+    if (rendered) return { data: { data: { body: rendered.body, glossary_data: { terms: rendered.terms } } } };
     throw new HttpError(502, "Server sumber tidak mengirim isi chapter (diblokir atau sedang sibuk). Coba chapter lain atau ulangi nanti.");
   });
   const inner = payload?.data?.data ?? {};
@@ -629,27 +692,24 @@ async function chapterContent(rawId: number, slug: string, order: number) {
     if (e instanceof HttpError && (e.status === 404 || e.status === 403)) throw e;
   }
 
+  // Dua putaran percobaan; tiap perender punya kuota sendiri, jadi percobaan berlebihan justru
+  // menghabiskan kuota dan memperlambat jawaban.
   let rendered: Rendered | null = null;
   let renderNote = "";
-  // Perender kadang mengevaluasi halaman sebelum isinya terhidrasi: ulangi beberapa kali.
-  // Dua putaran saja: tiap perender punya kuota sendiri, jadi percobaan berulang justru
-  // menghabiskan kuota dan memperlambat jawaban.
   for (let attempt = 0; attempt < 2 && !rendered; attempt++) {
     if (attempt) await new Promise((r) => setTimeout(r, 1200));
     const candidate = await chapterViaRender(referer, order).catch((e: unknown) => {
       renderNote = e instanceof HttpError ? `${e.status}: ${e.message}` : String(e);
       return null;
     });
-    if (candidate && candidate.paragraphs.length >= 3) rendered = candidate;
-    if (!rendered) {
-      // Perender kedua dengan mesin berbeda; peluang berhasilnya tidak bergantung pada yang pertama.
-      const jinaUrl = attempt ? `${referer}${referer.includes("?") ? "&" : "?"}cb=${Date.now()}` : referer;
-      rendered = await chapterViaJina(jinaUrl, order).catch(() => null);
-    }
     // Perender bisa menyajikan bab lain: judul resmi chapter dicocokkan dengan isi yang tersaji.
-    if (rendered && !chapterTitleMatches(rendered, meta?.title)) {
-      console.warn(`[novel] isi render tidak cocok dengan "${tidy(meta?.title)}" untuk chapter ${order}`);
-      rendered = null;
+    if (candidate && candidate.paragraphs.length >= 3 && chapterTitleMatches(candidate, meta?.title)) {
+      rendered = candidate;
+    }
+    if (!rendered) {
+      const jinaUrl = attempt ? `${referer}${referer.includes("?") ? "&" : "?"}cb=${Date.now()}` : referer;
+      const alt = await chapterViaJina(jinaUrl, order).catch(() => null);
+      if (alt && chapterTitleMatches(alt, meta?.title)) rendered = alt;
     }
   }
   if (!rendered) {

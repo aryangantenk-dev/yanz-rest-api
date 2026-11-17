@@ -1,6 +1,7 @@
 // film-proxy (Supabase Edge Function)
-// Meneruskan GET /fetch?url=... ke API Sankanime, yang menolak IP server Vercel.
-// Antarmukanya sama dengan scripts/film-proxy/install.sh (header x-proxy-key).
+// Meneruskan /fetch?url=... ke API publik situs sumber yang menolak IP data center Vercel
+// (jkt48.com, wtr-lab.com). POST /fetch?url=...&body=<isi mentah> diteruskan sebagai POST.
+// Permintaan wajib membawa header x-proxy-key.
 // Pasang:  supabase functions deploy film-proxy --no-verify-jwt
 //          supabase secrets set FILM_PROXY_KEY=<kunci acak>
 // Lalu di hosting: SANKA_PROXY_URL=https://<ref>.supabase.co/functions/v1/film-proxy
@@ -8,11 +9,13 @@
 // Secret opsional FILM_PROXY_ALLOW: daftar host yang diizinkan, dipisah koma.
 
 const KEY = Deno.env.get("FILM_PROXY_KEY") ?? "";
-const ALLOW = (Deno.env.get("FILM_PROXY_ALLOW") ?? "sankavollerei.web.id,sankanime.web.id")
+const ALLOW = (Deno.env.get("FILM_PROXY_ALLOW") ?? "sankavollerei.web.id,sankanime.web.id,jkt48.com")
   .split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+// Isi permintaan (query `body`) diteruskan apa adanya; hanya POST dari pemanggil kita sendiri.
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const MAX_BYTES = 5 * 1024 * 1024;
 const SAFE_HEADER = /^[\w/+*.,;=\- ]{1,150}$/;
+const SAFE_COOKIE = /^[\w\-.=;:+/ ]{1,4000}$/;
 
 function allowed(raw: string): URL | null {
   let u: URL;
@@ -39,7 +42,7 @@ function reply(status: number, body: BodyInit, type = "text/plain; charset=utf-8
 
 Deno.serve(async (req) => {
   const here = new URL(req.url);
-  if (req.method !== "GET") return reply(405, "method not allowed");
+  if (req.method !== "GET" && req.method !== "POST") return reply(405, "method not allowed");
   if (here.pathname.endsWith("/health")) return reply(200, "ok");
   if (!here.pathname.endsWith("/fetch")) return reply(404, "not found");
   const given = req.headers.get("x-proxy-key") ?? "";
@@ -58,11 +61,27 @@ Deno.serve(async (req) => {
     if (q.get("origin") === "1") headers["origin"] = referer.origin;
   }
   if (q.get("xhr") === "1") headers["x-requested-with"] = "XMLHttpRequest";
+  // jkt48.com: halamannya sendiri menyertakan X-Request-Id acak di tiap panggilan API.
+  if (q.get("rid") === "1") headers["x-request-id"] = crypto.randomUUID();
+  // Cookie dari pemanggil (mis. hasil GET halaman sebelumnya) diteruskan apa adanya.
+  const cookie = q.get("cookie") ?? "";
+  if (cookie && SAFE_COOKIE.test(cookie)) headers["cookie"] = cookie;
+
+  const body = q.get("body") ?? "";
+  if (body.length > 8000) return reply(413, "body terlalu besar");
+  const method = req.method === "POST" && body ? "POST" : "GET";
+  if (method === "POST") headers["content-type"] = "application/json";
 
   try {
     let res: Response | null = null;
     for (let hop = 0; hop <= 5; hop++) {
-      res = await fetch(target.href, { headers, redirect: "manual", signal: AbortSignal.timeout(20000) });
+      res = await fetch(target.href, {
+        method,
+        headers,
+        ...(method === "POST" && hop === 0 ? { body } : {}),
+        redirect: "manual",
+        signal: AbortSignal.timeout(20000),
+      });
       const loc = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
       if (!loc) break;
       await res.body?.cancel();
@@ -74,9 +93,17 @@ Deno.serve(async (req) => {
     if (!res) return reply(502, "gagal mengambil: terlalu banyak pengalihan");
     const buf = new Uint8Array(await res.arrayBuffer());
     if (buf.byteLength > MAX_BYTES) return reply(502, "gagal mengambil: respons terlalu besar");
+    // Cookie balasan diteruskan lewat header agar pemanggil bisa memakainya pada permintaan berikutnya.
+    const setCookie = (res.headers.getSetCookie?.() ?? [])
+      .map((c) => c.split(";")[0])
+      .join("; ")
+      .replace(/[^\w\-.=;:+/ ]/g, "")
+      .slice(0, 4000);
     return reply(res.status, buf, res.headers.get("content-type") ?? "application/octet-stream", {
       "x-final-url": target.href.slice(0, 500),
       "x-upstream-status": String(res.status),
+      "x-set-cookie": setCookie,
+      "access-control-expose-headers": "x-final-url,x-upstream-status,x-set-cookie",
     });
   } catch (e) {
     if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) return reply(504, "timeout");

@@ -365,6 +365,15 @@ const CONTENT_SCRIPT = (contentUrl: string) => `(async () => {
   return { body: inner.body || [], terms: (inner.glossary_data && inner.glossary_data.terms) || [] };
 })()`;
 
+/** Halaman chapter di atas batas tamu menampilkan pemberitahuan "requires registration". */
+const LOGIN_WALL = /requires registration|guests can preview AI translation/i;
+
+/** Deteksi dinding login WTR-LAB (tamu hanya 10 chapter pertama tiap judul). */
+async function guestWallHit(pageUrl: string): Promise<boolean> {
+  const text = await renderEval(pageUrl, "document.body.innerText.slice(0, 800)").catch(() => null);
+  return typeof text === "string" && LOGIN_WALL.test(text);
+}
+
 type RawContent = { body?: unknown; terms?: unknown };
 
 /** Isi chapter lengkap lewat perantara browser perender. */
@@ -681,6 +690,15 @@ async function chapterContent(rawId: number, slug: string, order: number) {
     throw new HttpError(
       403,
       `Chapter ${order} terkunci di WTR-LAB (tamu hanya bisa membaca 10 chapter pertama setiap judul). Buka langsung di situsnya atau pakai akun yang sudah unlock.`,
+    );
+  }
+
+  // Tamu WTR-LAB hanya bisa membuka 10 chapter pertama; di atas itu situs menampilkan
+  // pemberitahuan pendaftaran, bukan isi chapter.
+  if (order > 10 && (await guestWallHit(referer))) {
+    throw new HttpError(
+      403,
+      `Chapter ${order} butuh akun WTR-LAB. Tamu hanya bisa membuka 10 chapter pertama tiap judul (chapter 1-10); sisanya perlu login/unlock di wtr-lab.com.`,
     );
   }
 

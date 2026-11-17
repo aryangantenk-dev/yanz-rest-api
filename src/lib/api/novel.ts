@@ -369,9 +369,13 @@ const CONTENT_SCRIPT = (contentUrl: string) => `(async () => {
 const LOGIN_WALL = /requires registration|guests can preview AI translation/i;
 
 /** Deteksi dinding login WTR-LAB (tamu hanya 10 chapter pertama tiap judul). */
-async function guestWallHit(pageUrl: string): Promise<boolean> {
-  const text = await renderEval(pageUrl, "document.body.innerText.slice(0, 800)").catch(() => null);
-  return typeof text === "string" && LOGIN_WALL.test(text);
+async function guestWallHit(pageUrl: string, tries = 2): Promise<boolean> {
+  for (let i = 0; i < tries; i++) {
+    if (i) await new Promise((r) => setTimeout(r, 1200));
+    const text = await renderEval(pageUrl, "document.body.innerText.slice(0, 800)").catch(() => null);
+    if (typeof text === "string" && LOGIN_WALL.test(text)) return true;
+  }
+  return false;
 }
 
 type RawContent = { body?: unknown; terms?: unknown };
@@ -695,7 +699,7 @@ async function chapterContent(rawId: number, slug: string, order: number) {
 
   // Tamu WTR-LAB hanya bisa membuka 10 chapter pertama; di atas itu situs menampilkan
   // pemberitahuan pendaftaran, bukan isi chapter.
-  if (order > 10 && (await guestWallHit(referer))) {
+  if (order > 10 && (await guestWallHit(referer, 1))) {
     throw new HttpError(
       403,
       `Chapter ${order} butuh akun WTR-LAB. Tamu hanya bisa membuka 10 chapter pertama tiap judul (chapter 1-10); sisanya perlu login/unlock di wtr-lab.com.`,
@@ -709,6 +713,14 @@ async function chapterContent(rawId: number, slug: string, order: number) {
     firstError = e;
     // Chapter terkunci/404 bukan soal blokir: jangan cari jalan lain.
     if (e instanceof HttpError && (e.status === 404 || e.status === 403)) throw e;
+  }
+
+  // Gagal baca di chapter ke-11 ke atas hampir selalu karena batas tamu WTR-LAB.
+  if (order > 10 && firstError instanceof HttpError && firstError.status >= 500) {
+    throw new HttpError(
+      403,
+      `Chapter ${order} butuh akun WTR-LAB. Tamu hanya bisa membuka 10 chapter pertama tiap judul (chapter 1-10); chapter lainnya perlu login/unlock di wtr-lab.com.`,
+    );
   }
 
   // Dua putaran percobaan; tiap perender punya kuota sendiri, jadi percobaan berlebihan justru

@@ -6,6 +6,9 @@ import { RATE_LIMIT } from "@/lib/limits";
  * Pelindung API: batas permintaan per IP + blokir (ban) untuk pelanggar berulang.
  *
  *  - Maksimal RATE_LIMIT_PER_MIN (default 45) permintaan per menit per IP.
+ *  - Permintaan dengan API key paket berbayar dihitung per akun dengan batas paketnya
+ *    (lihat src/lib/plans.ts), terpisah dari hitungan IP, dan tidak pernah memicu blokir IP:
+ *    pelanggan berbayar tidak ikut terkena ulah pengguna lain di IP yang sama.
  *  - Melewati batas = HTTP 429 dan 1 pelanggaran.
  *  - BAN_AFTER_STRIKES (default 3) pelanggaran dalam 10 menit, atau banjir
  *    permintaan (> 4x batas dalam 1 menit) = IP diblokir permanen.
@@ -111,7 +114,16 @@ export type Verdict =
   | { kind: "limited"; headers: Record<string, string>; strikes: number; retryAfter: number }
   | { kind: "banned"; headers: Record<string, string>; reason: string };
 
-export async function guard(ip: string): Promise<Verdict> {
+/** Akun paket berbayar: hitungannya per akun (`id`) dengan batas `limit` per menit. */
+export type PaidBucket = { id: string; limit: number };
+
+/** IP ini sudah mencapai batas per menitnya (dan tidak sedang diblokir). Tidak menambah hitungan. */
+export function ipBusy(ip: string): boolean {
+  const b = state.buckets.get(ip);
+  return !!b && b.reset >= Date.now() && b.count >= RATE_LIMIT && !state.bans.has(ip);
+}
+
+export async function guard(ip: string, paid: PaidBucket | null = null): Promise<Verdict> {
   await ensureBans();
   const banned = state.bans.get(ip);
   if (banned !== undefined) return { kind: "banned", headers: { "x-banned": "1" }, reason: banned };
@@ -121,21 +133,27 @@ export async function guard(ip: string): Promise<Verdict> {
     for (const [k, v] of state.buckets) if (v.reset < now) state.buckets.delete(k);
     for (const [k, v] of state.strikes) if (v.exp < now) state.strikes.delete(k);
   }
-  let b = state.buckets.get(ip);
+  // Kunci "u:<id akun>" tidak mungkin bertabrakan dengan alamat IP.
+  const id = paid ? `u:${paid.id}` : ip;
+  const limit = paid ? paid.limit : RATE_LIMIT;
+  let b = state.buckets.get(id);
   if (!b || b.reset < now) {
     b = { count: 0, reset: now + WINDOW_MS, struck: false };
-    state.buckets.set(ip, b);
+    state.buckets.set(id, b);
   }
   b.count++;
   const retryAfter = Math.max(1, Math.ceil((b.reset - now) / 1000));
-  const headers = {
-    "x-ratelimit-limit": String(RATE_LIMIT),
-    "x-ratelimit-remaining": String(Math.max(0, RATE_LIMIT - b.count)),
+  const headers: Record<string, string> = {
+    "x-ratelimit-limit": String(limit),
+    "x-ratelimit-remaining": String(Math.max(0, limit - b.count)),
     "x-ratelimit-reset": String(retryAfter),
   };
-  if (b.count <= RATE_LIMIT) return { kind: "ok", headers };
+  if (b.count <= limit) return { kind: "ok", headers };
 
-  headers["retry-after" as keyof typeof headers] = String(retryAfter);
+  headers["retry-after"] = String(retryAfter);
+  // Akun berbayar cukup ditahan sampai menit berikutnya, tanpa pelanggaran dan tanpa blokir IP.
+  if (paid) return { kind: "limited", headers, strikes: 0, retryAfter };
+
   let s = state.strikes.get(ip);
   if (!s || s.exp < now) s = { n: 0, exp: now + STRIKE_TTL_MS };
   if (!b.struck) {

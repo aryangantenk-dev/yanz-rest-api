@@ -13,14 +13,14 @@ export const categories: Category[] = [
     id: "ai",
     name: "Artificial Intelligence",
     tagline: "Chat & generator gambar",
-    description: "Endpoint AI untuk percakapan cerdas dan pembuatan gambar dari teks, tanpa perlu API key.",
+    description: "Endpoint AI untuk percakapan cerdas dan pembuatan gambar dari teks.",
     seoTitle: "REST API AI Gratis: Chat AI & Text to Image",
   },
   {
     id: "tools",
     name: "Tools",
     tagline: "Utilitas developer harian",
-    description: "Kumpulan alat bantu: QR Code, pemendek URL, penerjemah, kalkulator, hash, DNS, dan info IP.",
+    description: "Kumpulan alat bantu: QR Code, pemendek URL, penerjemah, kalkulator, hash, DNS, info IP, web ke APK, gambar ke URL, dan layanan gratis Zefame.",
     seoTitle: "REST API Tools: QR Code, Short URL, Translate, Hash, DNS",
   },
   {
@@ -101,11 +101,32 @@ export const categories: Category[] = [
     seoTitle: "REST API Anime: Scraper Animekuindo, Link Player & Embed",
   },
   {
+    id: "donghua",
+    name: "Donghua",
+    tagline: "Scraper Anichin",
+    description: "Scraper anichin.ro: beranda, episode terbaru, donghua populer, jelajah genre/musim/studio, jadwal rilis mingguan, metadata lengkap seri, link player tiap episode, dan proxy gambar.",
+    seoTitle: "REST API Donghua: Scraper Anichin, Jadwal Rilis, Link Player Embed",
+  },
+  {
+    id: "novel",
+    name: "Novel",
+    tagline: "Scraper WTR-LAB",
+    description: "Scraper wtr-lab.com: novel terjemahan terbaru, peringkat harian/mingguan/bulanan, pencarian, jelajah genre, metadata lengkap seri, isi chapter, dan proxy sampul.",
+    seoTitle: "REST API Novel: Scraper WTR-LAB, Chapter Teks & Peringkat",
+  },
+  {
     id: "film",
     name: "Film",
-    tagline: "Sankanime, LK21 & player",
-    description: "Data film dan serial dari Sankanime Movies: pencarian, trending, detail lengkap dengan pemeran, daftar episode, player video siap pasang, link stream dan unduhan. Ditambah scraper LK21 (Layarkaca21) untuk beranda, daftar, genre, detail, dan pemeran.",
-    seoTitle: "REST API Film: Sankanime & LK21, Player Video, Detail & Pemeran",
+    tagline: "Film & serial dari Animekuy",
+    description: "Data film dan serial dari animekuy.web.id (metadata TMDB): trending, populer, pencarian, detail, daftar episode, rekomendasi, dan link player siap pasang di iframe dari Vidy, EmbedMaster, VidSrc, dan VidLink.",
+    seoTitle: "REST API Film & Serial: Data TMDB, Episode, Link Player Embed",
+  },
+  {
+    id: "jkt48",
+    name: "JKT48",
+    tagline: "Member, jadwal & berita",
+    description: "Data dari situs resmi jkt48.com: daftar dan profil member, jadwal bulanan, jadwal theater lengkap dengan lineup dan seitansai, berita, serta ulang tahun member terdekat.",
+    seoTitle: "REST API JKT48: Member, Jadwal Theater, Berita, Ulang Tahun",
   },
 ];
 

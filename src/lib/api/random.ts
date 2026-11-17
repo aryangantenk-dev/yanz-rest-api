@@ -3,6 +3,7 @@ import type { Endpoint } from "./types";
 import { HttpError } from "./types";
 import { fetchJson, need, num, opt, pick } from "./helpers";
 import { dares, facts, gombal, jokes, pantun, quotes, truths } from "./data";
+import { laheluTag, randomLaheluMeme, type MemeFilter } from "./lahelu";
 
 export const randomEndpoints: Endpoint[] = [
   {
@@ -146,6 +147,8 @@ function imageOut<T extends { image: string }>(sp: URLSearchParams, payload: T):
   return payload;
 }
 
+const MEME_TYPES: Record<string, MemeFilter> = { gambar: "image", video: "video", semua: "any" };
+
 const redirectParam = { name: "redirect", description: "Isi 1 untuk langsung dialihkan ke berkas gambar.", example: "" };
 
 const NEKOS_IMAGE = ["neko", "waifu", "husbando", "kitsune"];
@@ -256,19 +259,40 @@ const moreEndpoints: Endpoint[] = [
   },
   {
     category: "random", slug: "meme", kind: "json",
-    title: "Meme",
-    description: "Meme acak dari Reddit. Default mengambil dari komunitas Indonesia; bisa diganti ke subreddit lain.",
-    params: [{ name: "subreddit", description: "Nama subreddit sumber. Default indonesia.", example: "indonesia" }, redirectParam],
+    title: "Meme Lahelu",
+    description: "Meme acak berbahasa Indonesia dari lahelu.com, gambar atau video, lengkap dengan judul, tagar, jumlah vote, dan pengunggahnya. Bisa disaring per tagar; meme bertanda sensitif dilewati.",
+    params: [
+      { name: "tipe", description: `Jenis media: ${Object.keys(MEME_TYPES).join(", ")}. Default gambar.`, example: "gambar" },
+      { name: "tag", description: "Tagar Lahelu, mis. funny, relate, anime, gaming, absurd, nostalgia. Kosongkan untuk meme populer acak.", example: "" },
+      { name: "redirect", description: "Isi 1 untuk langsung dialihkan ke berkas medianya (gambar atau video).", example: "" },
+    ],
     handler: async ({ sp }) => {
-      const sub = opt(sp, "subreddit", "indonesia").replace(/[^A-Za-z0-9_]/g, "").slice(0, 30) || "indonesia";
-      type M = { postLink?: string; subreddit?: string; title?: string; url?: string; nsfw?: boolean; spoiler?: boolean; author?: string; ups?: number; code?: number; message?: string };
-      for (let i = 0; i < 3; i++) {
-        const d = await fetchJson<M>(`https://meme-api.com/gimme/${sub}`);
-        if (!d.url) throw new HttpError(404, d.message ?? "Subreddit tidak ditemukan atau tidak punya meme bergambar.");
-        if (d.nsfw || d.spoiler) continue;
-        return imageOut(sp, { title: d.title ?? null, image: d.url, subreddit: d.subreddit ?? sub, author: d.author ?? null, upvotes: d.ups ?? 0, source: d.postLink ?? null });
-      }
-      throw new HttpError(404, "Tidak menemukan meme yang aman dari subreddit tersebut. Coba lagi.");
+      const tipe = opt(sp, "tipe", "gambar").toLowerCase();
+      const filter = MEME_TYPES[tipe];
+      if (!filter) throw new HttpError(400, `Tipe tidak dikenal. Pilihan: ${Object.keys(MEME_TYPES).join(", ")}.`);
+      const rawTag = opt(sp, "tag");
+      const tag = laheluTag(rawTag);
+      if (rawTag && !tag) throw new HttpError(400, "Parameter 'tag' hanya boleh berisi huruf, angka, dan tanda hubung.");
+      const m = await randomLaheluMeme(filter, tag);
+      if (opt(sp, "redirect") === "1") return new Response(null, { status: 302, headers: { location: m.media, "cache-control": "no-store" } });
+      return {
+        id: m.id,
+        title: m.title,
+        type: m.type,
+        // Untuk video, `image` berisi gambar pratinjaunya dan berkas videonya ada di `video`.
+        image: m.type === "image" ? m.media : m.thumbnail,
+        video: m.type === "video" ? m.media : null,
+        width: m.width,
+        height: m.height,
+        hashtags: m.hashtags,
+        topic: m.topic,
+        author: m.author,
+        upvotes: m.upvotes,
+        downvotes: m.downvotes,
+        comments: m.comments,
+        created_at: m.created_at,
+        source: m.source,
+      };
     },
   },
 ];

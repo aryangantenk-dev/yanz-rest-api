@@ -1,15 +1,10 @@
 import type { Metadata } from "next";
 import { DocsShell } from "@/components/docs-shell";
 import { allMeta } from "@/lib/api/registry";
-import { SITE_NAME, SITE_URL } from "@/lib/site";
+import { DOCS_DESCRIPTION, DOCS_TITLE, jsonLdText, pageMeta } from "@/lib/seo";
+import { SITE_NAME, SITE_PITCH, SITE_URL } from "@/lib/site";
 
-export const metadata: Metadata = {
-  title: "Dokumentasi REST API Lengkap dengan Playground",
-  description:
-    "Dokumentasi seluruh endpoint yanz.api: AI, tools, text, image, canvas, random, search, downloader, games, islami, informasi, komik, anime, dan film. Coba langsung di browser dan salin kode cURL, JavaScript, Python, PHP. Tanpa API key.",
-  alternates: { canonical: "/docs" },
-  openGraph: { url: "/docs", title: "Dokumentasi REST API yanz.api", description: "Semua endpoint, parameter, dan playground interaktif tanpa API key." },
-};
+export const metadata: Metadata = pageMeta({ title: DOCS_TITLE, absolute: true, description: DOCS_DESCRIPTION, path: "/docs" });
 
 export default function DocsPage() {
   const list = allMeta();
@@ -19,9 +14,12 @@ export default function DocsPage() {
       {
         "@type": "TechArticle",
         headline: `Dokumentasi ${SITE_NAME}`,
+        description: DOCS_DESCRIPTION,
         url: `${SITE_URL}/docs`,
+        isPartOf: { "@id": `${SITE_URL}/#website` },
+        publisher: { "@id": `${SITE_URL}/#org` },
         inLanguage: "id-ID",
-        about: "REST API gratis tanpa API key",
+        about: `REST API ${SITE_PITCH}`,
       },
       {
         "@type": "ItemList",
@@ -37,7 +35,7 @@ export default function DocsPage() {
       {
         "@type": "BreadcrumbList",
         itemListElement: [
-          { "@type": "ListItem", position: 1, name: "Beranda", item: SITE_URL },
+          { "@type": "ListItem", position: 1, name: SITE_NAME, item: `${SITE_URL}/` },
           { "@type": "ListItem", position: 2, name: "Dokumentasi", item: `${SITE_URL}/docs` },
         ],
       },
@@ -46,7 +44,7 @@ export default function DocsPage() {
   return (
     <>
       <DocsShell />
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLdText(jsonLd) }} />
     </>
   );
 }

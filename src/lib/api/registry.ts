@@ -9,11 +9,18 @@ import { infoEndpoints } from "./info";
 import { komikEndpoints } from "./komik";
 import { animeEndpoints } from "./anime";
 import { filmEndpoints } from "./film";
+import { donghuaEndpoints } from "./donghua";
+import { novelEndpoints } from "./novel";
 import { canvasEndpoints } from "./canvas";
 import { searchEndpoints } from "./search";
 import { downloaderEndpoints } from "./downloader";
 import { gamesEndpoints } from "./games";
 import { mediaToolEndpoints } from "./mediatools";
+import { web2apkEndpoints } from "./web2apk";
+import { toUrlEndpoints } from "./tourl";
+import { jkt48Endpoints } from "./jkt48";
+import { zefameEndpoints } from "./zefame";
+import { workerEndpoints } from "./worker";
 import { categories } from "./categories";
 
 export const endpoints: Endpoint[] = [
@@ -31,11 +38,29 @@ export const endpoints: Endpoint[] = [
   ...komikEndpoints,
   ...animeEndpoints,
   ...filmEndpoints,
+  ...donghuaEndpoints,
+  ...novelEndpoints,
+  ...jkt48Endpoints,
   // Kategorinya beragam; urutan per kategori diatur ulang oleh allMeta().
   ...mediaToolEndpoints,
+  ...web2apkEndpoints,
+  ...toUrlEndpoints,
+  ...zefameEndpoints,
+  ...workerEndpoints,
 ];
 
-const index = new Map(endpoints.map((e) => [`${e.category}/${e.slug}`, e]));
+// Jalur utama didaftarkan lebih dulu supaya slug kanonik selalu menang atas alias.
+const index = new Map<string, Endpoint>();
+for (const e of endpoints) {
+  const key = `${e.category}/${e.slug}`;
+  if (!index.has(key)) index.set(key, e);
+}
+for (const e of endpoints) {
+  for (const alias of e.aliases ?? []) {
+    const key = `${e.category}/${alias}`;
+    if (!index.has(key)) index.set(key, e);
+  }
+}
 
 export function findEndpoint(key: string): Endpoint | undefined {
   return index.get(key);
@@ -49,6 +74,7 @@ export function toMeta(e: Endpoint): EndpointMeta {
     description: e.description,
     params: e.params,
     kind: e.kind,
+    ...(e.upload ? { upload: e.upload } : {}),
     path: `/api/${e.category}/${e.slug}`,
   };
 }

@@ -1,407 +1,380 @@
-import { load, type CheerioAPI } from "cheerio";
 import type { Endpoint } from "./types";
 import { HttpError } from "./types";
 import { need, num, opt } from "./helpers";
-import { absUrl, clean, cleanSlug, imgSrc, type El } from "./scrape";
-import { proxyText } from "./filmproxy";
-import { sankaEndpoints } from "./sanka";
+import { escapeHtml } from "./scrape";
 
 /*
- * Kategori film. LK21 menolak IP server Vercel, jadi semua permintaan dititipkan
- * lewat film-proxy di VPS (lihat ./filmproxy.ts dan scripts/film-proxy).
- *
- *   - LK21 : https://tv12.lk21official.cc (film) + https://tv.nontondrama.vip (serial)
- *
- * Catatan untuk sumber berikutnya (belum dipasang): data SankaMovies (sankanime.web.id/movies)
- * berasal dari https://www.sankavollerei.web.id/plananimek/movie/{home,search,filter,trending,
- * genres,detail/<type>/<id>,person/<id>}. Jawabannya dibungkus { "_encsankaa": base64url(zlib(JSON)) }
- * dan host itu juga menolak IP Vercel, jadi perlu masuk ALLOW_HOSTS film-proxy lebih dulu.
+ * Sumber: https://animekuy.web.id/film (situs milik sendiri, di Netlify).
+ * Halamannya SPA; datanya diambil dari Netlify Function situs itu
+ * (/.netlify/functions/film?action=...), yang meneruskan metadata TMDB.
+ * Videonya tidak di-host di sana: situs memasang iframe ke penyedia embed pihak
+ * ketiga dengan pola URL tetap (ID TMDB, atau ID IMDb untuk VidSrc). Pola yang sama
+ * dipakai di sini, jadi tidak ada halaman penyedia yang di-scrape.
  */
+const SITE = "https://animekuy.web.id";
+const API = `${SITE}/.netlify/functions/film`;
 
-/* ============================================================ LK21 ====== */
+type J = Record<string, unknown>;
+const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+const obj = (v: unknown): J => (v && typeof v === "object" && !Array.isArray(v) ? (v as J) : {});
+const str = (v: unknown): string | null => {
+  const s = typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : "";
+  return s && s !== "N/A" ? s : null;
+};
+const intv = (v: unknown): number | null => {
+  const s = str(v);
+  return s && /^\d{1,9}$/.test(s) ? Number(s) : null;
+};
 
-const LK = "https://tv12.lk21official.cc";
-const LK_SERIES = "https://tv.nontondrama.vip";
-const LK_NAME = "LK21";
+/* ------------------------------------------------------------ pengambilan */
 
-const LK_RESERVED = new Set([
-  "genre", "country", "year", "quality", "artist", "director", "page", "search", "populer", "latest", "rating", "release",
-  "most-commented", "top-movie-today", "latest-series", "top-series-today", "series", "nontondrama", "rekomendasi-film-pintar", "404.html",
-]);
+const MIN = 60_000;
+/** Tiap panggilan keluar memakai jatah Netlify Functions situs sumber, jadi dibatasi dan disimpan. */
+const MAX_PER_MINUTE = 60;
+const cache = new Map<string, { at: number; ttl: number; data: J }>();
+const inflight = new Map<string, Promise<J>>();
+const calls: number[] = [];
 
-type LkRef = { slug: string; series: boolean };
+async function kuyGet(params: Record<string, string | number>, ttl: number): Promise<J> {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
+  const key = qs.toString();
+  const now = Date.now();
+  const hit = cache.get(key);
+  if (hit && now - hit.at < hit.ttl) return hit.data;
+  const running = inflight.get(key);
+  if (running) return running;
 
-/** Kenali tautan judul LK21: "/<slug>" (film) atau "/nontondrama?page=<slug>" (serial). */
-function lkRef(href: string | undefined, base: string): LkRef | null {
-  if (!href) return null;
-  let u: URL;
+  while (calls.length && now - calls[0] > MIN) calls.shift();
+  if (calls.length >= MAX_PER_MINUTE) throw new HttpError(429, "Permintaan ke Animekuy sedang padat. Coba lagi sekitar satu menit lagi.");
+  calls.push(now);
+
+  const job = (async () => {
+    let res: Response;
+    try {
+      res = await fetch(`${API}?${key}`, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(16000),
+        headers: { accept: "application/json", "user-agent": "YanzAPI/1.0", referer: `${SITE}/film` },
+      });
+    } catch (e) {
+      if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) throw new HttpError(504, "Animekuy terlalu lama merespons.");
+      throw new HttpError(502, "Gagal menghubungi Animekuy.");
+    }
+    const text = await res.text();
+    let body: J | null = null;
+    try {
+      body = obj(JSON.parse(text));
+    } catch {
+      body = null;
+    }
+    const msg = str(body?.error);
+    if (!res.ok) {
+      if (msg && /tidak ditemukan/i.test(msg)) throw new HttpError(404, msg);
+      if (res.status === 400) throw new HttpError(400, msg ?? "Permintaan ditolak Animekuy.");
+      if (res.status === 429) throw new HttpError(429, "Animekuy sedang membatasi permintaan. Coba lagi beberapa saat lagi.");
+      throw new HttpError(502, msg ? `Animekuy: ${msg}` : `Animekuy merespons dengan status ${res.status}.`);
+    }
+    if (!body) throw new HttpError(502, "Animekuy tidak mengembalikan JSON.");
+    if (cache.size >= 500) {
+      const oldest = cache.keys().next().value;
+      if (oldest !== undefined) cache.delete(oldest);
+    }
+    cache.set(key, { at: Date.now(), ttl, data: body });
+    return body;
+  })();
+  inflight.set(key, job);
   try {
-    u = new URL(href, base);
+    return await job;
+  } finally {
+    inflight.delete(key);
+  }
+}
+
+/* ------------------------------------------------------------ bentuk data */
+
+type Kind = "movie" | "series";
+
+/** Kartu di daftar. Kolom `imdbID` dari sumber sebenarnya berisi ID TMDB. */
+function listItems(body: J) {
+  if (body.Response === "False") return [];
+  if (!Array.isArray(body.Search)) throw new HttpError(502, "Format daftar dari Animekuy berubah.");
+  const seen = new Set<string>();
+  const out: { id: string; title: string; type: Kind; year: number | null; poster: string | null }[] = [];
+  for (const raw of body.Search) {
+    const x = obj(raw);
+    const id = (str(x.imdbID) ?? "").toLowerCase();
+    const type = x.Type === "series" ? "series" : x.Type === "movie" ? "movie" : null;
+    if (!type || !/^(?:tt\d{5,12}|\d{1,12})$/.test(id) || seen.has(`${type}:${id}`)) continue;
+    seen.add(`${type}:${id}`);
+    out.push({ id, title: str(x.Title) ?? `Film ${id}`, type, year: intv(x.Year), poster: httpsUrl(x.Poster) });
+  }
+  return out;
+}
+
+function httpsUrl(v: unknown): string | null {
+  const s = str(v);
+  if (!s) return null;
+  try {
+    const u = new URL(s);
+    return u.protocol === "https:" && !u.username && !u.password ? u.href : null;
   } catch {
     return null;
   }
-  const parts = u.pathname.split("/").filter(Boolean);
-  if (parts[0] === "nontondrama") {
-    const s = u.searchParams.get("page") || "";
-    return /^[a-z0-9][a-z0-9-]*$/i.test(s) ? { slug: s, series: true } : null;
-  }
-  if (parts.length !== 1 || LK_RESERVED.has(parts[0])) return null;
-  return { slug: parts[0], series: u.hostname.endsWith("nontondrama.vip") };
 }
 
-const lkUrl = (slug: string, series: boolean) => `${series ? LK_SERIES : LK}/${slug}`;
-
-function lkSlugParam(sp: URLSearchParams, name = "slug"): string {
-  const raw = need(sp, name, 300);
-  if (/^https?:\/\//i.test(raw)) {
-    const ref = lkRef(raw, LK);
-    if (!ref) throw new HttpError(400, `URL ${LK_NAME} tidak dikenali. Isi dengan slug, contoh: avatar-2009.`);
-    return cleanSlug(ref.slug, name).toLowerCase();
-  }
-  return cleanSlug(raw, name).toLowerCase();
+function idParam(sp: URLSearchParams): string {
+  const id = need(sp, "id", 20).toLowerCase();
+  if (!/^(?:tt\d{5,12}|\d{1,12})$/.test(id)) throw new HttpError(400, "Parameter 'id' harus ID TMDB (angka, mis. 19995) atau ID IMDb (mis. tt0499549).");
+  return id;
 }
 
-/** "Avatar (2009)" -> { title: "Avatar", year: 2009 } */
-function splitYear(raw: string): { title: string; year: number | null } {
-  const m = /^(.*?)\s*\((\d{4})\)\s*$/.exec(raw);
-  return m ? { title: m[1].trim(), year: Number(m[2]) } : { title: raw, year: null };
+function kindParam(sp: URLSearchParams): Kind | null {
+  const t = opt(sp, "tipe").toLowerCase();
+  if (!t) return null;
+  if (t === "movie" || t === "film") return "movie";
+  if (t === "series" || t === "serial" || t === "tv") return "series";
+  throw new HttpError(400, "Parameter 'tipe' tidak dikenal. Pilihan: movie, series.");
 }
 
-/** "01:46" atau "2h 42m" -> menit */
-function minutes(raw: string): number | null {
-  let m = /^(\d{1,2}):(\d{2})$/.exec(raw);
-  if (m) return Number(m[1]) * 60 + Number(m[2]);
-  m = /^(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?$/i.exec(raw.trim());
-  if (m && (m[1] || m[2])) return Number(m[1] || 0) * 60 + Number(m[2] || 0);
-  return null;
-}
-
-const numOrNull = (v: string | undefined | null): number | null => {
-  const n = Number((v ?? "").replace(",", ".").trim());
-  return v && Number.isFinite(n) ? n : null;
+type Detail = {
+  id: string;
+  imdb_id: string | null;
+  title: string;
+  type: Kind;
+  year: number | null;
+  runtime: string | null;
+  genres: string[];
+  rating: number | null;
+  plot: string | null;
+  poster: string | null;
+  total_seasons: number | null;
 };
 
-function lkPoster(el: El, base: string): string | null {
-  const img = el.find("img").first();
-  return imgSrc(img, base) || absUrl(el.find("source").last().attr("data-srcset") || el.find("source").last().attr("srcset"), base);
-}
-
-/** Kartu judul LK21 (<article> di slider maupun grid). */
-function lkCard($: CheerioAPI, el: El, base: string) {
-  const a = el.find('a[itemprop="url"], a[href]').first();
-  const ref = lkRef(a.attr("href"), base);
-  if (!ref) return null;
-  const named = splitYear(clean(el.find(".poster-title").first().text()) || clean(el.find("img").first().attr("alt")));
-  if (!named.title) return null;
-  const episodes = numOrNull(el.find(".episode strong").first().text());
-  const series = ref.series || episodes !== null || el.find(".episode").length > 0;
-  const dur = clean(el.find(".duration").first().text());
-  const season = /^S\.?\s*(\d+)$/i.exec(dur);
-  const genres = (el.find('meta[itemprop="genre"]').attr("content") || el.find(".genre").first().text() || "")
-    .split(",").map((g) => clean(g)).filter(Boolean);
+/**
+ * ID TMDB film dan serial saling tumpang tindih (19995 = film Avatar, tetapi juga bisa
+ * serial lain), jadi untuk ID angka `tipe` wajib. ID IMDb sudah unik.
+ */
+async function loadDetail(id: string, kind: Kind | null): Promise<Detail> {
+  const isImdb = id.startsWith("tt");
+  if (!isImdb && !kind) throw new HttpError(400, "Parameter 'tipe' wajib diisi untuk ID TMDB: movie atau series. ID IMDb (tt...) tidak membutuhkannya.");
+  const d = await kuyGet({ action: "detail", id, ...(kind ? { type: kind } : {}) }, 6 * 60 * MIN);
+  const type = d.Type === "series" ? "series" : d.Type === "movie" ? "movie" : null;
+  const tmdb = str(d.tmdbId);
+  if (d.Response === "False" || !type || !tmdb) throw new HttpError(404, "Judul tidak ditemukan di TMDB.");
+  const imdb = (str(d.imdbID) ?? "").toLowerCase();
+  const rating = Number(str(d.imdbRating));
+  const seasons = intv(d.totalSeasons);
   return {
-    title: named.title,
-    slug: ref.slug,
-    type: series ? "series" : "movie",
-    year: numOrNull(el.find(".year").first().text()) ?? named.year,
-    rating: numOrNull(el.find('[itemprop="ratingValue"]').first().text() || el.find(".rating").first().text()),
-    quality: clean(el.find(".label").first().text()) || null,
-    runtime: series || !dur ? null : dur,
-    runtime_minutes: series ? null : minutes(dur),
-    season: season ? Number(season[1]) : null,
-    episodes,
-    genres,
-    poster: lkPoster(el, base),
-    url: lkUrl(ref.slug, series),
+    id: tmdb,
+    imdb_id: /^tt\d{5,12}$/.test(imdb) ? imdb : null,
+    title: str(d.Title) ?? `Film ${tmdb}`,
+    type,
+    year: intv(d.Year),
+    runtime: str(d.Runtime),
+    genres: (str(d.Genre) ?? "").split(",").map((g) => g.trim()).filter(Boolean),
+    rating: Number.isFinite(rating) && rating > 0 ? Math.round(rating * 10) / 10 : null,
+    plot: str(d.Plot),
+    poster: httpsUrl(d.Poster),
+    total_seasons: type === "series" ? seasons ?? 0 : null,
   };
 }
 
-type LkCard = NonNullable<ReturnType<typeof lkCard>>;
-
-function lkCards($: CheerioAPI, scope: El, base: string): LkCard[] {
-  const out: LkCard[] = [];
-  const seen = new Set<string>();
-  scope.find("article").each((_, n) => {
-    const c = lkCard($, $(n), base);
-    if (c && !seen.has(c.slug)) {
-      seen.add(c.slug);
-      out.push(c);
-    }
-  });
+async function loadSeason(tmdbId: string, season: number) {
+  const body = await kuyGet({ action: "season", id: tmdbId, type: "series", season }, 60 * MIN);
+  const out: { episode: number; title: string | null }[] = [];
+  for (const raw of arr(body.Episodes)) {
+    const e = obj(raw);
+    const n = intv(e.Episode);
+    if (n && n <= 10000) out.push({ episode: n, title: str(e.Title) });
+  }
   return out;
 }
 
-async function lkPage(url: string): Promise<{ $: CheerioAPI; url: string }> {
-  const r = await proxyText(url, { referer: `${LK}/` }, LK_NAME);
-  return { $: load(r.text), url: r.finalUrl };
+/* ------------------------------------------------------------ player */
+
+const SERVERS = ["vidy", "embedmaster", "vidsrc", "vidlink"] as const;
+type Server = (typeof SERVERS)[number];
+const SERVER_NAME: Record<Server, string> = { vidy: "Vidy", embedmaster: "EmbedMaster", vidsrc: "VidSrc", vidlink: "VidLink" };
+
+/** Pola URL yang sama dengan film.js di Animekuy. VidSrc memakai ID IMDb, sisanya ID TMDB. */
+function playerUrl(server: Server, d: Detail, season: number, episode: number): string | null {
+  const series = d.type === "series";
+  const path = series ? `tv/${d.id}/${season}/${episode}` : `movie/${d.id}`;
+  if (server === "vidy") return `https://www.vidy.st/${path}`;
+  if (server === "embedmaster") return `https://embedmaster.link/${path}`;
+  if (server === "vidlink") return `https://vidlink.pro/${path}`;
+  if (!d.imdb_id) return null;
+  return `https://vidsrc.to/embed/${series ? `tv/${d.imdb_id}/${season}/${episode}` : `movie/${d.imdb_id}`}`;
 }
 
-/** Halaman daftar (grid + paginasi): /populer, /genre/x, /artist/x, ... */
-async function lkListing(path: string, page: number, what: string) {
-  const { $, url } = await lkPage(`${LK}/${path}${page > 1 ? `/page/${page}` : ""}`);
-  const items = lkCards($, $(".gallery-grid, #post-container").first().length ? $(".gallery-grid, #post-container") : $("main"), url);
-  const m = /Halaman\s+(\d+)\s+dari\s+(\d+)/i.exec($("main h3").toArray().map((n) => clean($(n).text())).join(" | "));
-  let totalPages = m ? Number(m[2]) : 0;
-  if (!totalPages) {
-    $(".pagination li a").each((_, n) => {
-      const v = Number(clean($(n).text()));
-      if (Number.isInteger(v) && v > totalPages) totalPages = v;
-    });
-  }
-  if (!items.length) {
-    throw new HttpError(404, totalPages && page > totalPages ? `Halaman ${page} tidak ada. ${what} hanya ${totalPages} halaman.` : `${what} tidak ditemukan di ${LK_NAME}.`);
-  }
+function playerList(d: Detail, season: number, episode: number) {
+  return SERVERS.map((server) => ({ server, name: SERVER_NAME[server], url: playerUrl(server, d, season, episode) })).filter(
+    (p): p is { server: Server; name: string; url: string } => p.url !== null,
+  );
+}
+
+/** Membaca id/tipe/season/episode, memastikan judulnya ada dan (untuk serial) episodenya terdaftar di TMDB. */
+async function resolvePlay(sp: URLSearchParams) {
+  const d = await loadDetail(idParam(sp), kindParam(sp));
+  if (d.type === "movie") return { d, season: 0, episode: 0, episode_title: null as string | null };
+  const season = Math.floor(num(sp, "season", 1, 1, 100));
+  const episode = Math.floor(num(sp, "episode", 1, 1, 10000));
+  if (d.total_seasons && season > d.total_seasons) throw new HttpError(404, `Season ${season} tidak ada. '${d.title}' punya ${d.total_seasons} season.`);
+  const list = await loadSeason(d.id, season);
+  const found = list.find((e) => e.episode === episode);
+  if (!found) throw new HttpError(404, list.length ? `Episode ${episode} tidak ada. Season ${season} punya ${list.length} episode.` : `Season ${season} belum punya daftar episode di TMDB.`);
+  return { d, season, episode, episode_title: found.title };
+}
+
+function embedHtml(title: string, url: string): string {
+  return `<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<title>${escapeHtml(title)}</title>
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}iframe{position:fixed;inset:0;width:100%;height:100%;border:0}</style>
+</head>
+<body>
+<iframe src="${escapeHtml(url)}" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen referrerpolicy="no-referrer"></iframe>
+</body>
+</html>`;
+}
+
+/* ------------------------------------------------------------ endpoint */
+
+const ID_PARAM = { name: "id", required: true, description: "ID TMDB (angka dari daftar/pencarian) atau ID IMDb (tt...).", example: "19995" };
+const TIPE_PARAM = { name: "tipe", description: "movie atau series. Wajib untuk ID TMDB karena ID film dan serial bisa sama; tidak perlu untuk ID IMDb.", example: "movie", options: ["movie", "series"] };
+
+function discover(slug: string, section: string, title: string, description: string): Endpoint {
   return {
-    heading: clean($("main h1").first().text()) || null,
-    page,
-    total_pages: Math.max(totalPages, page),
-    total: items.length,
-    items,
-  };
-}
-
-function lkPeople($: CheerioAPI, scope: El, prefix: "artist" | "director") {
-  const out: { name: string; slug: string }[] = [];
-  const seen = new Set<string>();
-  scope.find(`a[href*="/${prefix}/"]`).each((_, n) => {
-    const m = new RegExp(`/${prefix}/([^/?#]+)`).exec($(n).attr("href") || "");
-    const name = clean($(n).text());
-    if (m && name && !seen.has(m[1])) {
-      seen.add(m[1]);
-      out.push({ name, slug: m[1] });
-    }
-  });
-  return out;
-}
-
-type LkEpisode = { episode: number | null; title: string | null; slug: string; url: string };
-
-async function lkDetail(slug: string) {
-  let page: { $: CheerioAPI; url: string };
-  try {
-    page = await lkPage(`${LK}/${slug}`);
-    if (!page.$("h1").first().text().trim() || !page.$(".movie-info").length) throw new HttpError(404, "kosong");
-  } catch (e) {
-    if (!(e instanceof HttpError) || e.status !== 404) throw e;
-    // Serial tinggal di host terpisah.
-    try {
-      page = await lkPage(`${LK_SERIES}/${slug}`);
-    } catch (e2) {
-      if (e2 instanceof HttpError && e2.status === 404) throw new HttpError(404, `Judul '${slug}' tidak ditemukan di ${LK_NAME}.`);
-      throw e2;
-    }
-  }
-  const { $, url } = page;
-  const info = $(".movie-info");
-  const rawTitle = clean(info.find("h1").first().text());
-  if (!rawTitle) throw new HttpError(404, `Judul '${slug}' tidak ditemukan di ${LK_NAME}.`);
-  const named = splitYear(rawTitle);
-  const series = new URL(url).hostname.endsWith("nontondrama.vip") || $("body").attr("data-web_type") === "series" || $("#season-data").length > 0;
-
-  const tags = info.find(".info-tag span").toArray().map((n) => clean($(n).text())).filter(Boolean);
-  const durTag = tags.find((t) => /^\d+h(\s*\d+m)?$|^\d+m$/i.test(t)) || null;
-  const genres: { name: string; slug: string }[] = [];
-  const countries: { name: string; slug: string }[] = [];
-  info.find(".tag-list a[href]").each((_, n) => {
-    const m = /\/(genre|country)\/([^/?#]+)/.exec($(n).attr("href") || "");
-    if (m) (m[1] === "genre" ? genres : countries).push({ name: clean($(n).text()), slug: m[2] });
-  });
-
-  const meta: Record<string, string> = {};
-  const detail = info.find(".detail").first();
-  detail.find("p").each((_, n) => {
-    const label = clean($(n).find("span").first().text()).replace(/:$/, "").toLowerCase();
-    const row = $(n).clone();
-    row.find("span").first().remove();
-    if (label) meta[label] = clean(row.text());
-  });
-  const row = (label: string) => detail.find("p").filter((_, n) => clean($(n).find("span").first().text()).toLowerCase().startsWith(label)).first();
-
-  const synEl = info.find(".synopsis").first();
-  const trailer = $("a.yt-lightbox[href]").first().attr("href") || $(".trailer-series iframe").first().attr("src") || null;
-
-  // Daftar episode serial: <script id="season-data"> berisi JSON { "<season>": [{ episode_no, title, slug }] }.
-  const seasons: { season: number; total: number; episodes: LkEpisode[] }[] = [];
-  if (series) {
-    try {
-      const data = JSON.parse($("#season-data").first().text() || "{}") as Record<string, { episode_no?: number | string; title?: string; slug?: string }[]>;
-      for (const [k, list] of Object.entries(data)) {
-        if (!Array.isArray(list)) continue;
-        const episodes = list
-          .filter((e) => e && typeof e.slug === "string" && e.slug)
-          .map((e) => ({ episode: numOrNull(String(e.episode_no ?? "")), title: clean(e.title) || null, slug: e.slug as string, url: `${LK_SERIES}/${e.slug}` }))
-          .sort((a, b) => (a.episode ?? 0) - (b.episode ?? 0));
-        seasons.push({ season: Number(k) || seasons.length + 1, total: episodes.length, episodes });
-      }
-      seasons.sort((a, b) => a.season - b.season);
-    } catch {
-      /* format berubah: biarkan kosong */
-    }
-  }
-
-  const related: { title: string; slug: string; year: number | null; poster: string | null; url: string }[] = [];
-  $(".video-list li a[href]").each((_, n) => {
-    const ref = lkRef($(n).attr("href"), url);
-    const title = clean($(n).find(".video-title").text());
-    if (ref && title) related.push({ title, slug: ref.slug, year: numOrNull($(n).find(".video-year").text()), poster: lkPoster($(n), url), url: lkUrl(ref.slug, ref.series) });
-  });
-  if (!related.length) {
-    for (const c of lkCards($, $(".mob-related-series"), url)) related.push({ title: c.title, slug: c.slug, year: c.year, poster: c.poster, url: lkUrl(c.slug, true) });
-  }
-
-  return {
-    title: named.title,
-    full_title: rawTitle,
-    slug,
-    type: series ? "series" : "movie",
-    year: named.year,
-    rating: numOrNull(info.find(".rating-number").first().attr("data-base-rating") || info.find(".rating-number").first().text()),
-    votes: numOrNull(info.find(".rating-users").first().attr("data-base-votes")) ?? numOrNull((meta["votes"] || "").replace(/\./g, "")),
-    tags,
-    resolution: tags.find((t) => /^\d{3,4}p$/i.test(t)) || null,
-    runtime: durTag,
-    runtime_minutes: durTag ? minutes(durTag) : null,
-    release: meta["release"] || null,
-    updated: meta["updated"] || null,
-    genres,
-    countries,
-    synopsis: clean(synEl.attr("data-full") || synEl.text()) || null,
-    poster: lkPoster(detail, url) || absUrl($("#videoAd").attr("poster"), url),
-    trailer,
-    directors: lkPeople($, row("sutradara"), "director"),
-    cast: lkPeople($, row("bintang"), "artist"),
-    ...(series ? { total_seasons: seasons.length, total_episodes: seasons.reduce((n, s) => n + s.total, 0), seasons } : {}),
-    related: related.slice(0, 20),
-    url,
-  };
-}
-
-const LK_SORT: Record<string, { path: string; label: string }> = {
-  populer: { path: "populer", label: "Terpopuler" },
-  terbaru: { path: "latest", label: "Terbaru" },
-  rating: { path: "rating", label: "Rating tertinggi" },
-  rilis: { path: "release", label: "Tahun rilis terbaru" },
-  komentar: { path: "most-commented", label: "Komentar terbanyak" },
-  unggulan: { path: "top-movie-today", label: "Unggulan hari ini" },
-};
-
-const lkEndpoints: Endpoint[] = [
-  {
-    category: "film", slug: "lk21-home", kind: "json",
-    title: "LK21: Beranda",
-    description: "Isi beranda LK21 (Layarkaca21): film unggulan, lalu tiap rak seperti Film Terbaru, Series Unggulan, Action Terbaru, dan Korea Terbaru.",
+    category: "film", slug, kind: "json", title, description,
     params: [],
     handler: async () => {
-      const { $, url } = await lkPage(`${LK}/`);
-      const featured = lkCards($, $("#featured-slider"), url);
-      const sections: { key: string | null; title: string; total: number; items: LkCard[] }[] = [];
-      $("main .widget").each((_, n) => {
-        const w = $(n);
-        const title = clean(w.find(".header h2").first().text());
-        const items = lkCards($, w, url);
-        if (title && items.length) sections.push({ key: w.attr("data-type") || null, title, total: items.length, items });
-      });
-      if (!featured.length && !sections.length) throw new HttpError(502, `Beranda ${LK_NAME} tidak berisi daftar film (tampilan situs mungkin berubah).`);
-      return { source: LK, featured, total_sections: sections.length, sections };
+      const items = listItems(await kuyGet({ action: "discover", section }, 10 * MIN));
+      if (!items.length) throw new HttpError(502, "Animekuy tidak mengirim judul apa pun untuk bagian ini.");
+      return { source: SITE, total: items.length, items };
     },
-  },
+  };
+}
+
+export const filmEndpoints: Endpoint[] = [
+  discover("trending", "trending", "Film Trending", "Film yang sedang ramai minggu ini (data TMDB lewat Animekuy). ID tiap judul dipakai di endpoint detail dan player."),
+  discover("populer", "popular", "Film Populer", "Daftar film populer saat ini (data TMDB lewat Animekuy)."),
+  discover("series", "series", "Serial Populer", "Daftar serial TV populer (data TMDB lewat Animekuy). Pakai tipe=series saat membuka detailnya."),
   {
-    category: "film", slug: "lk21-list", kind: "json",
-    title: "LK21: Daftar Film",
-    description: "Daftar film LK21 menurut urutan: terpopuler, terbaru, rating tertinggi, tahun rilis, komentar terbanyak, atau unggulan hari ini. 24 judul per halaman.",
+    category: "film", slug: "search", kind: "json",
+    title: "Cari Film & Serial",
+    description: "Cari film dan serial berdasarkan judul. Tiap hasil membawa id dan type untuk endpoint detail, season, dan player.",
     params: [
-      { name: "urut", description: "Urutan daftar. Default populer.", example: "populer", options: Object.keys(LK_SORT) },
-      { name: "page", description: "Nomor halaman. Default 1.", example: "1" },
+      { name: "q", required: true, description: "Judul film atau serial, minimal 2 karakter.", example: "avatar" },
+      { name: "page", description: "Nomor halaman hasil (1-500).", example: "1" },
     ],
     handler: async ({ sp }) => {
-      const urut = opt(sp, "urut", "populer").toLowerCase();
-      const sort = LK_SORT[urut];
-      if (!sort) throw new HttpError(400, `Parameter 'urut' tidak dikenal. Pilihan: ${Object.keys(LK_SORT).join(", ")}.`);
-      const page = num(sp, "page", 1, 1, 2000);
-      const r = await lkListing(sort.path, page, `Daftar '${urut}'`);
-      return { urut, label: sort.label, ...r };
+      const q = need(sp, "q", 100);
+      if (q.length < 2) throw new HttpError(400, "Parameter 'q' minimal 2 karakter.");
+      const page = Math.floor(num(sp, "page", 1, 1, 500));
+      const body = await kuyGet({ action: "search", q, page }, 10 * MIN);
+      const items = listItems(body);
+      return { source: SITE, query: q, page, total_pages: intv(body.totalPages) ?? 1, total_results: intv(body.totalResults) ?? items.length, total: items.length, items };
     },
   },
   {
-    category: "film", slug: "lk21-genre", kind: "json",
-    title: "LK21: Film per Genre, Negara, atau Tahun",
-    description: "Daftar film LK21 menurut genre (action, horror, ...), negara (usa, south-korea, ...), atau tahun rilis. 24 judul per halaman.",
-    params: [
-      { name: "genre", description: "Slug genre, contoh: action, horror, comedy, romance, animation.", example: "action" },
-      { name: "negara", description: "Slug negara, contoh: usa, south-korea, japan, indonesia, thailand.", example: "" },
-      { name: "tahun", description: "Tahun rilis, contoh: 2025.", example: "" },
-      { name: "page", description: "Nomor halaman. Default 1.", example: "1" },
-    ],
-    handler: async ({ sp }) => {
-      const genre = opt(sp, "genre").toLowerCase();
-      const negara = opt(sp, "negara").toLowerCase();
-      const tahun = opt(sp, "tahun");
-      const filled = [genre, negara, tahun].filter(Boolean).length;
-      if (filled !== 1) throw new HttpError(400, "Isi tepat satu dari parameter 'genre', 'negara', atau 'tahun'.");
-      const page = num(sp, "page", 1, 1, 2000);
-      if (tahun) {
-        if (!/^(19|20)\d{2}$/.test(tahun)) throw new HttpError(400, "Parameter 'tahun' harus 4 digit, contoh: 2025.");
-        return { filter: "tahun", value: tahun, ...(await lkListing(`year/${tahun}`, page, `Film tahun ${tahun}`)) };
-      }
-      const value = cleanSlug(genre || negara, genre ? "genre" : "negara");
-      if (!/^[a-z0-9-]{2,40}$/.test(value)) throw new HttpError(400, `Parameter '${genre ? "genre" : "negara"}' harus berupa slug, contoh: ${genre ? "action" : "south-korea"}.`);
-      return genre
-        ? { filter: "genre", value, ...(await lkListing(`genre/${value}`, page, `Genre '${value}'`)) }
-        : { filter: "negara", value, ...(await lkListing(`country/${value}`, page, `Negara '${value}'`)) };
-    },
-  },
-  {
-    category: "film", slug: "lk21-detail", kind: "json",
-    title: "LK21: Detail Film / Serial",
-    description: "Detail lengkap satu judul LK21: sinopsis, rating, genre, negara, durasi, sutradara, pemeran, trailer, judul terkait, dan untuk serial daftar episode tiap season. Slug didapat dari endpoint daftar atau search/lk21.",
-    params: [{ name: "slug", required: true, description: "Slug judul atau URL halaman LK21.", example: "avatar-2009" }],
-    handler: async ({ sp }) => ({ source: LK, ...(await lkDetail(lkSlugParam(sp))) }),
-  },
-  {
-    category: "film", slug: "lk21-pemeran", kind: "json",
-    title: "LK21: Pemeran Film",
-    description: "Daftar pemeran (bintang film) dan sutradara satu judul LK21. Tiap nama punya slug yang bisa dipakai di film/lk21-artis untuk melihat film lainnya. LK21 hanya menyediakan nama, tanpa foto atau nama karakter.",
-    params: [{ name: "slug", required: true, description: "Slug judul atau URL halaman LK21.", example: "avatar-2009" }],
+    category: "film", slug: "detail", kind: "json",
+    title: "Detail Film / Serial",
+    description: "Metadata satu judul: sinopsis, genre, rating, durasi, poster, ID IMDb. Film langsung disertai link player; serial disertai jumlah season (daftar episodenya ada di endpoint season).",
+    params: [ID_PARAM, TIPE_PARAM],
     handler: async ({ sp, origin }) => {
-      const d = await lkDetail(lkSlugParam(sp));
-      if (!d.cast.length && !d.directors.length) throw new HttpError(404, `${LK_NAME} tidak mencantumkan pemeran untuk '${d.full_title}'.`);
-      const person = (p: { name: string; slug: string }, peran: "artis" | "sutradara") => ({
-        ...p,
-        films: `${origin}/api/film/lk21-artis?slug=${encodeURIComponent(p.slug)}${peran === "sutradara" ? "&peran=sutradara" : ""}`,
-      });
+      const d = await loadDetail(idParam(sp), kindParam(sp));
+      if (d.type === "series") return { source: SITE, ...d };
+      return { source: SITE, ...d, embed: `${origin}/api/film/embed?id=${d.id}&tipe=movie`, players: playerList(d, 0, 0) };
+    },
+  },
+  {
+    category: "film", slug: "season", kind: "json",
+    title: "Daftar Episode Serial",
+    description: "Daftar episode satu season dari sebuah serial. Nomor season dan episodenya dipakai di endpoint player dan embed.",
+    params: [
+      { name: "id", required: true, description: "ID TMDB serial (angka) atau ID IMDb (tt...).", example: "82452" },
+      { name: "season", description: "Nomor season, mulai dari 1. Default 1.", example: "1" },
+    ],
+    handler: async ({ sp }) => {
+      const id = idParam(sp);
+      const d = await loadDetail(id, id.startsWith("tt") ? null : "series");
+      if (d.type !== "series") throw new HttpError(400, `'${d.title}' adalah film, bukan serial. Pakai endpoint detail.`);
+      const season = Math.floor(num(sp, "season", 1, 1, 100));
+      if (d.total_seasons && season > d.total_seasons) throw new HttpError(404, `Season ${season} tidak ada. '${d.title}' punya ${d.total_seasons} season.`);
+      const episodes = await loadSeason(d.id, season);
+      return { source: SITE, id: d.id, imdb_id: d.imdb_id, title: d.title, season, total_seasons: d.total_seasons, total: episodes.length, episodes };
+    },
+  },
+  {
+    category: "film", slug: "rekomendasi", kind: "json",
+    title: "Rekomendasi Serupa",
+    description: "Film atau serial yang mirip dengan satu judul, untuk bagian \"judul serupa\".",
+    params: [ID_PARAM, TIPE_PARAM],
+    handler: async ({ sp }) => {
+      const d = await loadDetail(idParam(sp), kindParam(sp));
+      const items = listItems(await kuyGet({ action: "recommendations", id: d.id, type: d.type }, 6 * 60 * MIN));
+      return { source: SITE, id: d.id, title: d.title, type: d.type, total: items.length, items };
+    },
+  },
+  {
+    category: "film", slug: "player", kind: "json",
+    title: "Link Player",
+    description: "URL embed dari empat penyedia (Vidy, EmbedMaster, VidSrc, VidLink) untuk satu film atau satu episode serial. Pasang salah satunya sebagai src <iframe>. Ketersediaan video, subtitle, dan iklan mengikuti penyedia masing-masing.",
+    params: [
+      ID_PARAM,
+      TIPE_PARAM,
+      { name: "season", description: "Nomor season, khusus serial. Default 1.", example: "" },
+      { name: "episode", description: "Nomor episode, khusus serial. Default 1.", example: "" },
+    ],
+    handler: async ({ sp, origin }) => {
+      const { d, season, episode, episode_title } = await resolvePlay(sp);
+      const series = d.type === "series";
+      const tail = series ? `&season=${season}&episode=${episode}` : "";
       return {
-        source: LK,
+        source: SITE,
+        id: d.id,
+        imdb_id: d.imdb_id,
         title: d.title,
-        slug: d.slug,
         type: d.type,
-        year: d.year,
+        ...(series ? { season, episode, episode_title } : {}),
         poster: d.poster,
-        total_cast: d.cast.length,
-        cast: d.cast.map((p) => person(p, "artis")),
-        directors: d.directors.map((p) => person(p, "sutradara")),
-        url: d.url,
+        embed: `${origin}/api/film/embed?id=${d.id}&tipe=${d.type}${tail}`,
+        players: playerList(d, season, episode),
       };
     },
   },
   {
-    category: "film", slug: "lk21-artis", kind: "json",
-    title: "LK21: Film per Pemeran / Sutradara",
-    description: "Daftar film LK21 yang dibintangi seorang pemeran, atau yang digarap seorang sutradara. Slug nama didapat dari film/lk21-pemeran atau film/lk21-detail.",
+    category: "film", slug: "embed", kind: "html",
+    title: "Embed Player",
+    description: "Halaman HTML berisi player film atau episode, layar penuh. Pakai URL ini langsung sebagai src <iframe> di situsmu. Videonya dimuat dari penyedia pihak ketiga yang bisa menampilkan iklan.",
     params: [
-      { name: "slug", required: true, description: "Slug nama, contoh: sam-worthington.", example: "sam-worthington" },
-      { name: "peran", description: "artis (default) atau sutradara.", example: "artis", options: ["artis", "sutradara"] },
-      { name: "page", description: "Nomor halaman. Default 1.", example: "1" },
+      ID_PARAM,
+      TIPE_PARAM,
+      { name: "season", description: "Nomor season, khusus serial. Default 1.", example: "" },
+      { name: "episode", description: "Nomor episode, khusus serial. Default 1.", example: "" },
+      { name: "server", description: "Penyedia player. Default vidy.", example: "vidy", options: [...SERVERS] },
     ],
     handler: async ({ sp }) => {
-      const slug = cleanSlug(need(sp, "slug", 120)).toLowerCase();
-      const peran = opt(sp, "peran", "artis").toLowerCase();
-      if (peran !== "artis" && peran !== "sutradara") throw new HttpError(400, "Parameter 'peran' tidak dikenal. Pilihan: artis, sutradara.");
-      const page = num(sp, "page", 1, 1, 500);
-      const r = await lkListing(`${peran === "artis" ? "artist" : "director"}/${slug}`, page, `${peran === "artis" ? "Pemeran" : "Sutradara"} '${slug}'`);
-      const name = (r.heading || "").replace(/^(Artis|Sutradara|Director|Artist)\s+/i, "") || null;
-      return { source: LK, peran, slug, name, page: r.page, total_pages: r.total_pages, total: r.total, items: r.items };
+      const server = (opt(sp, "server", "vidy").toLowerCase() as Server);
+      if (!SERVERS.includes(server)) throw new HttpError(400, `Parameter 'server' tidak dikenal. Pilihan: ${SERVERS.join(", ")}.`);
+      const { d, season, episode } = await resolvePlay(sp);
+      const url = playerUrl(server, d, season, episode);
+      if (!url) throw new HttpError(404, "Judul ini tidak punya ID IMDb, jadi VidSrc tidak bisa dipakai. Coba server lain.");
+      const title = d.type === "series" ? `${d.title} S${season}E${episode}` : d.title;
+      return new Response(embedHtml(title, url), {
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "public, max-age=300, s-maxage=600",
+          "content-security-policy": "default-src 'none'; frame-src https:; style-src 'unsafe-inline'; frame-ancestors *",
+          "x-robots-tag": "noindex",
+        },
+      });
     },
   },
 ];
-
-export const filmEndpoints: Endpoint[] = [...sankaEndpoints, ...lkEndpoints];

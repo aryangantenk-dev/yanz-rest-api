@@ -572,6 +572,99 @@ function MenuRow({ label, danger, last, children }: { label: string; danger?: bo
 /* Endpoint                                                             */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* Windows Media Player (wmp1, wmp2)                                    */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Gambarnya dibuat oleh apii.nexadev.my.id (/wmp1 dan /wmp2): teks ditempel ke tangkapan
+ * layar Windows Media Player, tiap baris dipisah "|". Sumber itu sendiri yang membungkus
+ * baris panjang dan mengecilkan huruf supaya muat, jadi di sini teks hanya dirapikan lalu
+ * diteruskan, dan hasil JPEG-nya dikembalikan apa adanya.
+ */
+const WMP_SOURCE = "https://apii.nexadev.my.id";
+const WMP_MAX_BYTES = 4 * 1024 * 1024;
+const WMP_TRIES = 3;
+const WMP_CACHE_MAX = 30;
+const WMP_CACHE_MS = 60 * 60 * 1000;
+
+type WmpImage = { buf: Uint8Array; type: string; at: number };
+const wmpCache = new Map<string, WmpImage>();
+
+function wmpText(sp: URLSearchParams): string {
+  const lines = cleanText(need(sp, "text", 300))
+    .split(/[|\n]/)
+    .map((l) => l.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  if (!lines.length) throw new HttpError(400, "Parameter 'text' tidak boleh kosong.");
+  if (lines.length > 12) throw new HttpError(400, "Parameter 'text' maksimal 12 baris.");
+  return lines.join("|");
+}
+
+const wmpWait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/*
+ * Sumbernya sesekali memutus koneksi (terlihat saat uji: permintaan pertama gagal, permintaan
+ * berikutnya lancar), jadi kegagalan jaringan dan status 5xx dicoba ulang sebelum menyerah.
+ */
+async function wmpFetch(skin: 1 | 2, text: string): Promise<WmpImage> {
+  const url = `${WMP_SOURCE}/wmp${skin}?text=${encodeURIComponent(text)}`;
+  let failure = new HttpError(502, "Gagal menghubungi pembuat gambar WMP.");
+  for (let attempt = 0; attempt < WMP_TRIES; attempt++) {
+    if (attempt) await wmpWait(350 * attempt);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(12000),
+        headers: { "user-agent": "YanzAPI/1.0", accept: "image/*" },
+      });
+    } catch (e) {
+      const slow = e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError");
+      failure = slow ? new HttpError(504, "Pembuat gambar WMP terlalu lama merespons. Coba lagi.") : new HttpError(502, "Gagal menghubungi pembuat gambar WMP.");
+      continue;
+    }
+    const type = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+    if (res.ok && /^image\/(jpeg|png|webp)$/.test(type)) {
+      let buf: Uint8Array;
+      try {
+        buf = new Uint8Array(await res.arrayBuffer());
+      } catch {
+        failure = new HttpError(502, "Koneksi ke pembuat gambar WMP terputus di tengah jalan.");
+        continue;
+      }
+      if (!buf.byteLength || buf.byteLength > WMP_MAX_BYTES) throw new HttpError(502, "Pembuat gambar WMP mengirim gambar yang tidak wajar ukurannya.");
+      return { buf, type, at: Date.now() };
+    }
+    await res.body?.cancel().catch(() => {});
+    if (res.status === 429) throw new HttpError(429, "Pembuat gambar WMP sedang membatasi permintaan. Coba lagi beberapa saat lagi.");
+    failure = new HttpError(502, res.ok ? "Pembuat gambar WMP tidak mengirim gambar." : `Pembuat gambar WMP merespons dengan status ${res.status}.`);
+    if (res.status < 500) break;
+  }
+  throw failure;
+}
+
+function wmpEndpoint(skin: 1 | 2, size: string): Endpoint {
+  return {
+    category: "canvas", slug: `wmp${skin}`, kind: "image",
+    title: `Windows Media Player ${skin}`,
+    description: `Teks berbaris di dalam jendela Windows Media Player jadul (tampilan ${skin}), seperti lirik lagu yang sedang diputar. Pisahkan baris dengan tanda |. Hasil JPEG ${size}.`,
+    params: [{ name: "text", required: true, description: "Teks, tiap baris dipisah tanda | (maks 300 karakter, 12 baris).", example: "ngapain cemburu|kan|cuman sebatas|teman" }],
+    handler: async ({ sp }) => {
+      const text = wmpText(sp);
+      const key = `${skin}:${text}`;
+      let img = wmpCache.get(key);
+      if (!img || Date.now() - img.at > WMP_CACHE_MS) {
+        img = await wmpFetch(skin, text);
+        wmpCache.delete(key);
+        wmpCache.set(key, img);
+        while (wmpCache.size > WMP_CACHE_MAX) wmpCache.delete(wmpCache.keys().next().value as string);
+      }
+      return binaryResponse(img.buf, img.type, "public, max-age=86400");
+    },
+  };
+}
+
 export const canvasEndpoints: Endpoint[] = [
   {
     category: "canvas", slug: "brat", kind: "image",
@@ -814,124 +907,8 @@ export const canvasEndpoints: Endpoint[] = [
       );
     },
   },
-  {
-    category: "canvas", slug: "wmp", kind: "image",
-    title: "Windows Media Player",
-    description: "Kartu \"sedang diputar\" bergaya jendela Windows Media Player klasik: sampul, judul, artis, dan bilah durasi.",
-    params: [
-      { name: "title", required: true, description: "Judul lagu.", example: "Lagu Favoritku" },
-      { name: "artist", description: "Nama artis.", example: "Yanz" },
-      { name: "image", description: "URL sampul album (JPG/PNG). Opsional.", example: "" },
-      { name: "current", description: "Posisi putar (m:ss). Default 1:12.", example: "1:12" },
-      { name: "duration", description: "Durasi total (m:ss). Default 3:45.", example: "3:45" },
-    ],
-    handler: async ({ sp }) => {
-      const title = need(sp, "title", 70);
-      const artist = opt(sp, "artist", "Artis tidak dikenal").slice(0, 60);
-      const cover = await optImage(sp, "image");
-      const toSec = (s: string, fb: number) => {
-        const m = /^(\d{1,3}):([0-5]\d)$/.exec(s);
-        return m ? Number(m[1]) * 60 + Number(m[2]) : fb;
-      };
-      const fmt = (n: number) => `${Math.floor(n / 60)}:${String(n % 60).padStart(2, "0")}`;
-      const dur = Math.max(1, toSec(opt(sp, "duration"), 225));
-      const cur = Math.min(dur, toSec(opt(sp, "current"), 72));
-      const pct = Math.round((cur / dur) * 100);
-      const hue = hashNum(title) % 360;
-      const ctl = (child: ReactNode, size = 46) => (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: size, height: size, borderRadius: size, background: "linear-gradient(180deg, #5d6f86, #2b3646)", border: "1px solid #101722" }}>{child}</div>
-      );
-      return render(
-        <div style={{ ...fill, padding: 22, background: "linear-gradient(135deg, #1d5fa8, #0a2a55)", fontFamily: "Inter" }}>
-          <div style={{ ...fill, flexDirection: "column", borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,0.55)", boxShadow: "0 18px 50px rgba(0,0,0,0.55)" }}>
-            {/* title bar */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: 46, padding: "0 8px 0 14px", background: "linear-gradient(180deg, #cfe3f7 0%, #9fc3e8 48%, #86b2e0 52%, #a9cdf0 100%)", color: "#0d1b2e" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: 12, background: "linear-gradient(135deg, #ff9a2e, #e2531c)" }}>
-                  <svg width="11" height="11" viewBox="0 0 10 10">
-                    <path d="M2 1l7 4-7 4z" fill="#fff" />
-                  </svg>
-                </div>
-                <div style={{ display: "flex", fontSize: 17, fontWeight: 600 }}>Windows Media Player</div>
-              </div>
-              <div style={{ display: "flex", gap: 2 }}>
-                {["#dfe9f5", "#dfe9f5", "#e04a3a"].map((c, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: i === 2 ? 46 : 30, height: 24, borderRadius: 4, background: c, border: "1px solid rgba(0,0,0,0.3)", color: i === 2 ? "#fff" : "#1b2b40", fontSize: 14, fontWeight: 700 }}>
-                    {i === 1 ? <div style={{ display: "flex", width: 11, height: 9, border: "2px solid #1b2b40" }} /> : i === 0 ? "–" : "x"}
-                  </div>
-                ))}
-              </div>
-            </div>
-            {/* now playing */}
-            <div style={{ display: "flex", flex: 1, alignItems: "center", gap: 36, padding: "0 44px", background: "radial-gradient(circle at 30% 20%, #1c2a3d 0%, #070b12 70%)", color: "#fff" }}>
-              {cover ? (
-                // eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text
-                <img src={cover} width={230} height={230} style={{ objectFit: "cover", borderRadius: 6, border: "2px solid rgba(255,255,255,0.35)" }} />
-              ) : (
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 230, height: 230, borderRadius: 6, border: "2px solid rgba(255,255,255,0.35)", background: `linear-gradient(135deg, hsl(${hue},70%,50%), hsl(${(hue + 70) % 360},75%,30%))` }}>
-                  <svg width="110" height="110" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M9 18V5l11-2v13" />
-                    <circle cx="6.5" cy="18" r="2.5" />
-                    <circle cx="17.5" cy="16" r="2.5" />
-                  </svg>
-                </div>
-              )}
-              <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
-                <div style={{ display: "flex", fontSize: 17, letterSpacing: 3, color: "#7fb4ff", fontWeight: 600 }}>SEDANG DIPUTAR</div>
-                <div style={{ display: "flex", marginTop: 12, fontSize: title.length > 28 ? 34 : 44, fontWeight: 700, lineHeight: 1.12 }}>{title}</div>
-                <div style={{ display: "flex", marginTop: 12, fontSize: 25, color: "#b8c6d9" }}>{artist}</div>
-                <div style={{ display: "flex", alignItems: "flex-end", gap: 5, marginTop: 26, height: 44 }}>
-                  {Array.from({ length: 26 }, (_, i) => (
-                    <div key={i} style={{ display: "flex", width: 8, height: 8 + (((hashNum(title) >>> (i % 13)) + i * 17) % 36), borderRadius: 2, background: "linear-gradient(180deg, #8fd0ff, #2f7fe0)" }} />
-                  ))}
-                </div>
-              </div>
-            </div>
-            {/* kontrol */}
-            <div style={{ display: "flex", flexDirection: "column", padding: "14px 26px 16px", background: "linear-gradient(180deg, #3b4658 0%, #1a212d 55%, #10151d 100%)", color: "#dfe7f2" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-                <div style={{ display: "flex", fontSize: 17, width: 52 }}>{fmt(cur)}</div>
-                <div style={{ display: "flex", flex: 1, height: 10, borderRadius: 5, background: "#0a0e14", border: "1px solid #4a586c" }}>
-                  <div style={{ display: "flex", width: `${pct}%`, height: "100%", borderRadius: 5, background: "linear-gradient(180deg, #9fe07a, #3fa52c)" }} />
-                </div>
-                <div style={{ display: "flex", fontSize: 17, width: 52, justifyContent: "flex-end" }}>{fmt(dur)}</div>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 18, marginTop: 12 }}>
-                {ctl(
-                  <svg width="20" height="20" viewBox="0 0 24 24">
-                    <rect x="6" y="6" width="12" height="12" rx="1.5" fill="#e8eef7" />
-                  </svg>,
-                )}
-                {ctl(
-                  <svg width="22" height="22" viewBox="0 0 24 24">
-                    <path d="M19 5v14l-9-7zM6 5h2.5v14H6z" fill="#e8eef7" />
-                  </svg>,
-                )}
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 74, height: 74, borderRadius: 37, background: "radial-gradient(circle at 50% 30%, #8fd0ff, #1f6fd6 65%, #0f3f8c)", border: "2px solid #cfe6ff" }}>
-                  <svg width="30" height="30" viewBox="0 0 24 24">
-                    <path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="#fff" />
-                  </svg>
-                </div>
-                {ctl(
-                  <svg width="22" height="22" viewBox="0 0 24 24">
-                    <path d="M5 5v14l9-7zM15.5 5H18v14h-2.5z" fill="#e8eef7" />
-                  </svg>,
-                )}
-                {ctl(
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#e8eef7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M4 10v4h4l5 4V6L8 10H4z" fill="#e8eef7" />
-                    <path d="M16.5 9a4 4 0 0 1 0 6" />
-                  </svg>,
-                )}
-              </div>
-            </div>
-          </div>
-        </div>,
-        900,
-        560,
-      );
-    },
-  },
+  wmpEndpoint(1, "1123×1401"),
+  wmpEndpoint(2, "720×1280"),
   {
     category: "canvas", slug: "ktp", kind: "image",
     title: "Kartu Identitas Parodi (KTP)",

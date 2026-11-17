@@ -536,7 +536,8 @@ async function chapterViaApi(rawId: number, slug: string, order: number) {
     chapter_id: reader.chapter?.id ?? null,
     title: tidy(reader.chapter?.title) || `Chapter ${order}`,
     url: referer,
-    characters: reader.chapter?.char_count ?? null,
+    // Dihitung dari teks yang benar-benar dikirim; char_count situs kadang hanya panjang mentah.
+    characters: paragraphs.join(" ").length,
     paragraphs: paragraphs.length,
     source: "api",
     navigation: {

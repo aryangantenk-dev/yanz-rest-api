@@ -41,7 +41,7 @@ export const metadata: Metadata = {
   appleWebApp: { title: SITE_NAME },
   // Ikon situs: favicon, ikon perangkat Apple, dan rujukan logo untuk hasil pencarian.
   icons: {
-    icon: [{ url: "/icon", type: "image/png", sizes: "64x64" }],
+    icon: [{ url: "/icon", type: "image/png", sizes: "96x96" }, { url: "/favicon.ico", sizes: "48x48" }],
     shortcut: "/icon",
     apple: [{ url: "/logo.png", sizes: "512x512", type: "image/png" }],
     other: [{ rel: "apple-touch-icon-precomposed", url: "/logo.png" }],

@@ -43,11 +43,11 @@ export function HomePricing({ total }: { total: number }) {
               key={plan.id}
               aria-labelledby={`harga-${plan.id}`}
               className={`relative flex flex-col border bg-card p-5 transition-transform duration-150 ${
-                featured ? "border-[var(--accent-edge)] shadow-[0_10px_30px_-18px_var(--accent-edge)] lg:scale-[1.03]" : "border-line"
+                featured ? "border-[var(--accent-edge)] plan-lift" : "border-line"
               }`}
             >
               {featured && (
-                <p className="mb-3 inline-flex self-start bg-accent px-2 py-1 font-mono text-[0.6875rem] font-bold uppercase tracking-wide text-[var(--on-accent)]">
+                <p className="mb-3 inline-flex self-start plan-badge px-2 py-1 font-mono text-[0.6875rem] font-bold uppercase tracking-wide">
                   {FEATURED_BADGE}
                 </p>
               )}

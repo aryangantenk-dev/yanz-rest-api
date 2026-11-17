@@ -335,14 +335,14 @@ export function PlanPanel({
                 id={`paket-${plan.id}`}
                 className={`scroll-mt-24 flex flex-col border bg-card p-5 sm:p-6 ${
                   plan.id === FEATURED_PLAN
-                    ? "border-[var(--accent-edge)] shadow-[0_10px_30px_-18px_var(--accent-edge)] md:scale-[1.01]"
+                    ? "border-[var(--accent-edge)] plan-lift"
                     : mine
                       ? "border-[var(--accent-edge)]"
                       : "border-line"
                 }`}
               >
                 {plan.id === FEATURED_PLAN && (
-                  <p className="mb-3 inline-flex self-start bg-accent px-2 py-1 font-mono text-[0.6875rem] font-bold uppercase tracking-wide text-[var(--on-accent)]">
+                  <p className="mb-3 inline-flex self-start plan-badge px-2 py-1 font-mono text-[0.6875rem] font-bold uppercase tracking-wide">
                     {FEATURED_BADGE}
                   </p>
                 )}

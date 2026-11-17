@@ -332,7 +332,8 @@ export function PlanPanel({
             return (
               <li
                 key={plan.id}
-                className={`flex flex-col border bg-card p-5 sm:p-6 ${
+                id={`paket-${plan.id}`}
+                className={`scroll-mt-24 flex flex-col border bg-card p-5 sm:p-6 ${
                   plan.id === FEATURED_PLAN
                     ? "border-[var(--accent-edge)] shadow-[0_10px_30px_-18px_var(--accent-edge)] md:scale-[1.01]"
                     : mine

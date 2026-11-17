@@ -1,6 +1,7 @@
 import type { Ctx, Endpoint, Upload } from "./types";
 import { HttpError } from "./types";
-import { need, num, opt, parseHttpUrl } from "./helpers";
+import { fetchRaw, need, num, opt, parseHttpUrl } from "./helpers";
+import sharp from "sharp";
 
 /*
   Endpoint yang dikerjakan "worker": layanan di mesin sendiri (folder worker/ di repo ini,
@@ -181,6 +182,18 @@ function choice(sp: URLSearchParams, name: string, options: readonly string[], f
   return v;
 }
 
+/** Kenali berkas gambar dari beberapa byte pertamanya (PNG, JPG, GIF, WebP, BMP). */
+function isImageFile(buf: Uint8Array): boolean {
+  const b = buf;
+  if (b.length < 12) return false;
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return true; // PNG
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return true; // JPEG
+  if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return true; // GIF
+  if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return true; // WebP
+  if (b[0] === 0x42 && b[1] === 0x4d) return true; // BMP
+  return false;
+}
+
 function sizeText(bytes: number): string {
   return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(2)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
@@ -276,7 +289,7 @@ export const workerEndpoints: Endpoint[] = [
   {
     category: "tools", slug: "compress", kind: "json",
     title: "Kompres Gambar & Video",
-    description: `Perkecil ukuran gambar (JPG atau WebP) maupun video (MP4, H.264) supaya lebih ringan dikirim. Untuk gambar, sisi terpanjang dibatasi 2560, 1600, atau 1280 piksel sesuai mutu. Untuk video, resolusi turun ke 480p, 720p, atau 1080p; durasi maks 5 menit. Jawaban menyertakan ukuran sebelum dan sesudah kompresi. ${KEEP}`,
+    description: "Perkecil ukuran gambar (JPG atau WebP) maupun video (MP4, H.264) supaya lebih ringan dikirim. Untuk gambar, sisi terpanjang dibatasi 2560, 1600, atau 1280 piksel sesuai mutu, dan hasilnya berupa data URL siap pakai. Untuk video, resolusi turun ke 480p, 720p, atau 1080p; durasi maks 5 menit dan tautan hasil berlaku 1 jam. Jawaban menyertakan ukuran sebelum dan sesudah kompresi.",
     params: [
       { name: "url", description: MEDIA_URL, example: "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4" },
       { name: "quality", description: "low (paling kecil), medium, atau high (paling tajam). Default medium.", example: "medium", options: ["low", "medium", "high"] },
@@ -288,6 +301,27 @@ export const workerEndpoints: Endpoint[] = [
       const quality = choice(sp, "quality", ["low", "medium", "high"], "medium");
       const format = choice(sp, "format", ["jpg", "webp"], "jpg");
       const src = await source(ctx);
+      // Gambar diolah di sini (sharp sudah tersedia di runtime Next.js); worker dipakai untuk video.
+      const raw: Uint8Array = src.body ?? new Uint8Array(await (await fetchRaw(src.url!, undefined, 30_000)).arrayBuffer());
+      if (isImageFile(raw)) {
+        const maxSide = quality === "low" ? 1280 : quality === "medium" ? 1600 : 2560;
+        const q = quality === "low" ? 68 : quality === "medium" ? 80 : 90;
+        const pipeline = sharp(raw).rotate().resize({ width: maxSide, height: maxSide, fit: "inside", withoutEnlargement: true });
+        const out = format === "webp" ? await pipeline.webp({ quality: q }).toBuffer() : await pipeline.jpeg({ quality: q, mozjpeg: true }).toBuffer();
+        const meta = await sharp(out).metadata();
+        return {
+          url: `data:${format === "webp" ? "image/webp" : "image/jpeg"};base64,${Buffer.from(out).toString("base64")}`,
+          kind: "image",
+          type: format === "webp" ? "image/webp" : "image/jpeg",
+          width: meta.width ?? null,
+          height: meta.height ?? null,
+          max_side: maxSide,
+          size_before: raw.byteLength,
+          size: out.byteLength,
+          size_text: sizeText(out.byteLength),
+          saved_percent: raw.byteLength ? Math.max(0, Math.round((1 - out.byteLength / raw.byteLength) * 100)) : 0,
+        };
+      }
       return fileResult(await callWorker("compress", { quality, format, url: src.url }, src.body, 115_000), origin);
     },
   },

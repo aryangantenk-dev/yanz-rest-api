@@ -16,6 +16,7 @@ import { searchEndpoints } from "./search";
 import { downloaderEndpoints } from "./downloader";
 import { sflEndpoints } from "./sfl";
 import { tempMailEndpoints } from "./tempmail";
+import { nexaEndpoints } from "./nexa";
 import { gamesEndpoints } from "./games";
 import { mediaToolEndpoints } from "./mediatools";
 import { web2apkEndpoints } from "./web2apk";
@@ -36,6 +37,7 @@ export const endpoints: Endpoint[] = [
   ...downloaderEndpoints,
   ...sflEndpoints,
   ...tempMailEndpoints,
+  ...nexaEndpoints,
   ...gamesEndpoints,
   ...islamiEndpoints,
   ...infoEndpoints,

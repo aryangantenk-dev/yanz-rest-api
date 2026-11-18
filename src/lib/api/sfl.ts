@@ -216,13 +216,17 @@ async function navigate(start: string, referer: string, chain: Hop[]): Promise<{
   throw new SflError(`Pengalihan terlalu banyak (>${MAX_HOP}).`, chain.map((c) => c.url).join(" -> "));
 }
 
-/** Setelah `/api/go`: ikuti sfl.gl sampai keluar ke domain tujuan. */
+/** Setelah `/api/go`: ikuti pengalihan sampai halaman tujuan yang sebenarnya. */
 async function finalize(start: string, referer: string, chain: Hop[]): Promise<string> {
   let url = start;
   let prev = referer;
+  let hops = 0;
   for (let i = 0; i < MAX_HOP; i++) {
-    if (!isSflHost(new URL(url).hostname)) return url;
+    // Halaman perantara (redirect.php, /ready, dll.) ikut dilewati sampai halaman biasa.
+    const intermediary = isSflHost(new URL(url).hostname) || /\/(redirect|go|ready)(\.php)?(\/|$)/i.test(new URL(url).pathname);
+    if (!intermediary && hops > 0) return url;
     const res = await request(url, { referer: prev });
+    hops++;
     chain.push({ url, status: res.status });
     if (res.status >= 300 && res.status < 400 && res.location) {
       prev = url;
@@ -231,7 +235,11 @@ async function finalize(start: string, referer: string, chain: Hop[]): Promise<s
     }
     if (res.status >= 400) throw new SflError(`Server menolak permintaan (HTTP ${res.status}).`, `${url} :: ${res.text}`);
     const next = sniffFinal(res.text, url);
-    if (!next || next === url) throw new SflError("Tujuan akhir tidak ditemukan di halaman /ready/go.", `${url} :: ${res.text}`);
+    if (!next || next === url) {
+      // Sudah halaman biasa tanpa tautan lanjutan: ini tujuannya.
+      if (!intermediary) return url;
+      throw new SflError("Tujuan akhir tidak ditemukan di halaman perantara.", `${url} :: ${res.text}`);
+    }
     prev = url;
     url = next;
   }

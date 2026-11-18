@@ -96,7 +96,7 @@ fi
 export PLAYWRIGHT_BROWSERS_PATH="$DIR/.browsers"
 echo "   mengunduh Chromium (±170 MB, sekali saja)..."
 .venv/bin/playwright install chromium >/dev/null 2>&1 || .venv/bin/playwright install chromium || warn "unduhan Chromium gagal"
-CHROME_BIN="$(find "$DIR/.browsers" -maxdepth 4 -type f \( -name chrome -o -name headless_shell \) 2>/dev/null | head -n 1)"
+CHROME_BIN="$(find "$DIR/.browsers" -maxdepth 5 -type f \( -name chrome -o -name headless_shell \) 2>/dev/null | head -n 1)"
 if [ -n "$CHROME_BIN" ]; then
   echo "   chromium: $CHROME_BIN"
   .venv/bin/pip install -q --no-cache-dir "playwright-captcha>=0.1.4,<0.2" 2>/dev/null || warn "playwright-captcha tidak terpasang (opsional)"
@@ -126,12 +126,16 @@ for i in $(seq 1 30); do
   curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1 && break
   sleep 1
 done
-RESULT="$(curl -sS --max-time 90 -H "x-worker-key: ${KEY}" "http://127.0.0.1:${PORT}/v1/diag?url=https://example.com" || true)"
+# Rute /v1/* hanya menerima POST; GET dijawab 405 (dulu ini yang membuat uji selalu gagal).
+RESULT="$(curl -sS --max-time 120 -X POST -H "x-worker-key: ${KEY}" \
+  "http://127.0.0.1:${PORT}/v1/diag?url=https://example.com" || true)"
 echo "$RESULT"
-if echo "$RESULT" | grep -q '"chromium": *{"ok": *true'; then
+if echo "$RESULT" | grep -qE '"chromium"[[:space:]]*:[[:space:]]*\{[[:space:]]*"ok"[[:space:]]*:[[:space:]]*true'; then
   printf '\n\033[32mBERES: browser bisa membuka situs.\033[0m Uji dari HP:\n'
   echo "  curl -sS \"https://www.yanzapi.my.id/api/tools/turnstile?url=https://example.com&wait=10&apikey=<KEY_PRO>\""
 else
-  printf '\n\033[31mMasih gagal.\033[0m Kirim 40 baris log ini:\n'
-  echo "  bash ctl.sh logs"
+  printf '\n\033[31mMasih gagal.\033[0m Rincian dari log worker:\n'
+  bash ctl.sh logs 2>/dev/null | grep -i "browser" | tail -n 10 || true
+  echo
+  echo "Kalau ingin melihat semuanya: bash ctl.sh logs"
 fi

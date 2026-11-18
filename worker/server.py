@@ -26,7 +26,7 @@ from urllib.parse import urljoin, urlsplit
 import aiohttp
 from aiohttp import web
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 ROOT = Path(__file__).resolve().parent
 
 
@@ -395,10 +395,21 @@ def _bundled_chrome() -> str | None:
     root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
     if not root or not Path(root).is_dir():
         return None
-    for pat in ("chromium-*/chrome-linux/chrome", "chromium_headless_shell-*/chrome-linux/headless_shell"):
+    # Playwright baru memakai folder chrome-linux64; versi lama chrome-linux. Keduanya didukung.
+    pats = (
+        "chromium-*/chrome-linux64/chrome",
+        "chromium-*/chrome-linux/chrome",
+        "chromium_headless_shell-*/chrome-linux64/headless_shell",
+        "chromium_headless_shell-*/chrome-linux/headless_shell",
+    )
+    for pat in pats:
         for f in sorted(Path(root).glob(pat), reverse=True):
             if f.is_file() and os.access(f, os.X_OK):
                 return str(f)
+    # Cadangan: telusuri sekali bila susunan folder Playwright berubah lagi.
+    for f in sorted(Path(root).glob("chromium*/**/chrome"), reverse=True):
+        if f.is_file() and os.access(f, os.X_OK):
+            return str(f)
     return None
 
 
@@ -408,7 +419,8 @@ async def _install_bundled_chrome() -> str | None:
     if not root:
         return None
     Path(root).mkdir(parents=True, exist_ok=True)
-    exe = str(Path(root) / ".venv" / "bin" / "playwright")
+    # `playwright` di sebelah interpreter yang sedang menjalankan worker (…/.venv/bin).
+    exe = str(Path(sys.executable).with_name("playwright"))
     if not Path(exe).is_file():
         exe = shutil.which("playwright") or ""
     if not exe:

@@ -255,7 +255,7 @@ export type SflResult = {
   chain: Hop[];
   /** Jumlah putaran gate verifikasi yang dilewati. */
   rounds: number;
-  /** Jejak panggilan API, dipakai saat mode debug. */
+  /** Jejak panggilan API, untuk log server. */
   trace: string[];
 };
 
@@ -352,7 +352,6 @@ export const sflEndpoints: Endpoint[] = [
         }
         throw e;
       }
-      if (sp.get("debug") === "1") return { target: result.url, trace: result.trace };
       return {
         target: result.url,
         host: result.host,

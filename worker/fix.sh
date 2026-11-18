@@ -113,6 +113,9 @@ bash ctl.sh restart >/dev/null 2>&1 || warn "restart gagal"
 PORT="$(grep -E '^PORT=' .env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '[:space:]')"; PORT="${PORT:-8080}"
 KEY="$(grep -E '^WORKER_KEY=' .env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '[:space:]')"
 for _ in $(seq 1 40); do curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1 && break; sleep 1; done
+HEALTH="$(curl -sS --max-time 5 -H "x-worker-key: ${KEY}" "http://127.0.0.1:${PORT}/health" 2>/dev/null || true)"
+echo "   versi berjalan: $(echo "$HEALTH" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)"
+echo "   antrean: $(echo "$HEALTH" | grep -o '"active":\[[^]]*\]')"
 ask_diag() {
   curl -sS --max-time 150 -X POST -H "x-worker-key: ${KEY}" \
     "http://127.0.0.1:${PORT}/v1/diag?url=https://example.com" 2>&1 || true

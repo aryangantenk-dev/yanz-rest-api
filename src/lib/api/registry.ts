@@ -14,6 +14,7 @@ import { novelEndpoints } from "./novel";
 import { canvasEndpoints } from "./canvas";
 import { searchEndpoints } from "./search";
 import { downloaderEndpoints } from "./downloader";
+import { sflEndpoints } from "./sfl";
 import { gamesEndpoints } from "./games";
 import { mediaToolEndpoints } from "./mediatools";
 import { web2apkEndpoints } from "./web2apk";
@@ -32,6 +33,7 @@ export const endpoints: Endpoint[] = [
   ...randomEndpoints,
   ...searchEndpoints,
   ...downloaderEndpoints,
+  ...sflEndpoints,
   ...gamesEndpoints,
   ...islamiEndpoints,
   ...infoEndpoints,

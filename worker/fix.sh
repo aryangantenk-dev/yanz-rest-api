@@ -55,12 +55,12 @@ fi
 NOW="$(grep -o 'VERSION = "[^"]*"' server.py 2>/dev/null | head -n1 | cut -d'"' -f2)"
 if [ -n "$NOW" ]; then ok "worker versi $NOW"; else warn "VERSION tidak terbaca"; fi
 # Kalau repo bukan checkout git (unduhan zip), ambil server.py langsung dari GitHub.
-if [ "$NOW" != "1.2.3" ] && command -v curl >/dev/null 2>&1; then
+if [ "$NOW" != "1.2.4" ] && command -v curl >/dev/null 2>&1; then
   if curl -fsSL --max-time 60 "$GITHUB_RAW/worker/server.py" -o /tmp/y-server.py 2>/dev/null &&
-     grep -q 'VERSION = "1.2.3"' /tmp/y-server.py; then
+     grep -q 'VERSION = "1.2.4"' /tmp/y-server.py; then
     cp -f server.py "server.py.bak.$(date +%s)" 2>/dev/null || true
     mv -f /tmp/y-server.py server.py
-    ok "server.py diperbarui dari GitHub (1.2.3)"
+    ok "server.py diperbarui dari GitHub (1.2.4)"
   else
     warn "tidak bisa mengambil server.py dari GitHub (jaringan/DNS?). Lanjut dengan versi lokal."
   fi

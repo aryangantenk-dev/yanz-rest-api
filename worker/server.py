@@ -26,7 +26,7 @@ from urllib.parse import urljoin, urlsplit
 import aiohttp
 from aiohttp import web
 
-VERSION = "1.2.3"
+VERSION = "1.2.4"
 ROOT = Path(__file__).resolve().parent
 
 
@@ -106,13 +106,16 @@ _stats = {"done": 0, "failed": 0, "started": time.time()}
 class Slot:
     """Kursi kerja: MAX_JOBS berjalan bersamaan, MAX_QUEUE menunggu.
 
-    `asyncio.wait_for` pada tugas yang menunggu kursi bisa membatalkannya di tengah jalan.
-    Pembatalan itu dulu membuat hitungan `_waiting` tidak pernah turun sehingga worker
-    menjawab "sedang penuh" selamanya sampai di-restart.
+    Dua jebakan yang dulu membuat worker menjawab "sedang penuh" selamanya sampai di-restart:
+    1. Pembatalan saat menunggu kursi (klien memutus koneksi / timeout) tidak menurunkan `_waiting`.
+    2. Pembatalan tepat setelah kursi didapat (sebelum blok `async with` dimasuki) tidak pernah
+       mengembalikan kursi, sehingga jumlah kursi yang terpakai naik terus.
+    Keduanya ditutup di sini, ditambah batas waktu menunggu di antrean.
     """
 
     def __init__(self, job: str):
         self.job = job
+        self.held = False
 
     async def __aenter__(self):
         global _waiting
@@ -120,17 +123,22 @@ class Slot:
             raise Fail(503, "Server pengolah sedang penuh. Coba lagi beberapa saat lagi.")
         _waiting += 1
         try:
-            await _slots.acquire()
+            await asyncio.wait_for(_slots.acquire(), QUEUE_WAIT)
+        except asyncio.TimeoutError:
+            raise Fail(503, "Server pengolah sedang penuh. Coba lagi beberapa saat lagi.") from None
         except BaseException:
-            _waiting -= 1
             raise
-        _waiting -= 1
+        finally:
+            _waiting -= 1
+        self.held = True
         _active[self.job] = time.time()
         return self
 
     async def __aexit__(self, *exc):
-        _active.pop(self.job, None)
-        _slots.release()
+        if self.held:
+            self.held = False
+            _active.pop(self.job, None)
+            _slots.release()
 
 
 # Tugas yang sedang memakai kursi: nama tugas -> waktu mulai. Dipakai /health untuk melihat
@@ -138,6 +146,8 @@ class Slot:
 _active: dict[str, float] = {}
 # Kursi yang dipakai lebih lama dari ini dianggap menggantung dan dilepas watchdog.
 STUCK_AFTER = int(_env("STUCK_AFTER_SEC", "240"))
+# Batas menunggu di antrean sebelum dijawab 503 (jangan sampai permintaan Vercel telanjur habis).
+QUEUE_WAIT = int(_env("QUEUE_WAIT_SEC", "40"))
 
 
 # ---------------------------------------------------------------------------
@@ -1216,9 +1226,15 @@ async def handle_job(request: web.Request) -> web.Response:
         return jres(404, {"error": "Tugas tidak dikenal."})
     work = Path(tempfile.mkdtemp(prefix=f"{name}-", dir=DATA / "tmp"))
     started = time.time()
+    slot = Slot(name)
     try:
-        async with Slot(name):
-            res = await asyncio.wait_for(fn(request, work), JOB_TIMEOUT + 15)
+        await slot.__aenter__()
+    except Fail as e:
+        _stats["failed"] += 1
+        shutil.rmtree(work, ignore_errors=True)
+        return jres(e.status, {"error": e.message})
+    try:
+        res = await asyncio.wait_for(fn(request, work), JOB_TIMEOUT + 15)
         _stats["done"] += 1
         res.headers["x-job-ms"] = str(int((time.time() - started) * 1000))
         return res
@@ -1234,6 +1250,7 @@ async def handle_job(request: web.Request) -> web.Response:
         print(f"[{name}] {type(e).__name__}: {e}", file=sys.stderr, flush=True)
         return jres(500, {"error": "Server pengolah gagal mengerjakan permintaan ini."})
     finally:
+        await slot.__aexit__(None, None, None)
         shutil.rmtree(work, ignore_errors=True)
 
 

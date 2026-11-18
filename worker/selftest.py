@@ -196,7 +196,16 @@ def main() -> int:
             raise RuntimeError("hasil kosong")
         return f"terbaca: {body['text']!r}"
 
-    for name, fn in (("health", health), ("kunci", auth), ("penjaga", guard), ("ssweb", ssweb), ("web2pdf", web2pdf), ("tomp3", tomp3), ("togif", togif),
+    def turnstile():
+        # Halaman contoh tanpa Turnstile: yang diuji adalah jalur kerjanya (browser terbuka,
+        # hasil dilaporkan), bukan bahwa tantangan bisa ditembus di situs orang lain.
+        code, _, raw = call("turnstile", {"url": "https://example.com", "wait": 3})
+        body = json.loads(raw or b"{}")
+        if code not in (200, 422) or "solved" not in body:
+            raise RuntimeError(f"jawaban tak terduga: {code}")
+        return f"terdeteksi={body.get('kind')} selesai={body.get('solved')}"
+
+    for name, fn in (("health", health), ("kunci", auth), ("penjaga", guard), ("ssweb", ssweb), ("web2pdf", web2pdf), ("turnstile", turnstile), ("tomp3", tomp3), ("togif", togif),
                      ("compress", compress), ("sticker", sticker), ("removebg", removebg), ("ocr", ocr), ("tts", tts), ("transcribe", transcribe)):
         check(name, fn)
 

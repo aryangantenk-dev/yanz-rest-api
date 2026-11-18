@@ -319,25 +319,35 @@ install_native() {
   fi
 
   echo "[3/5] Menyiapkan browser Chromium..."
-  SYS_CHROME="$(command -v chromium || command -v chromium-browser || command -v google-chrome || true)"
+  # Chromium dari paket snap (bawaan Ubuntu 22.04/24.04) TIDAK bisa keluar jaringan di LXC:
+  # curl dapat 200 tetapi Chromium melaporkan ERR_INTERNET_DISCONNECTED. Karena itu snap dilewati
+  # dan worker memakai Chromium bawaan Playwright.
+  case "$(command -v chromium || command -v chromium-browser || true)" in
+    ""|/snap/*|*/snap/*) SYS_CHROME="" ;;
+    *) SYS_CHROME="$(command -v chromium || command -v chromium-browser)" ;;
+  esac
   if [ -n "$SYS_CHROME" ]; then
-    echo "      Memakai Chromium sistem yang sudah terpasang ($SYS_CHROME) — hemat ~600 MB disk."
+    echo "      Memakai Chromium sistem non-snap yang sudah terpasang ($SYS_CHROME)."
     set_env_kv CHROMIUM_PATH "$SYS_CHROME"
-  elif command -v apt-get >/dev/null 2>&1; then
-    as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends chromium \
-      || as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends chromium-browser \
+  fi
+  mkdir -p "$DIR/.browsers"
+  PLAYWRIGHT_BROWSERS_PATH="$DIR/.browsers" "$DIR/.venv/bin/playwright" install chromium \
+    || PLAYWRIGHT_BROWSERS_PATH="$DIR/.browsers" "$DIR/.venv/bin/playwright" install chromium
+  if [ -z "$(find "$DIR/.browsers" -maxdepth 3 -name 'chrome' -o -maxdepth 3 -name 'headless_shell' 2>/dev/null | head -n 1)" ]; then
+    echo "Peringatan: Chromium bawaan Playwright belum terunduh; worker akan mencoba mengunduhnya saat dipakai." >&2
+  else
+    echo "      Chromium bawaan Playwright siap di $DIR/.browsers"
+  fi
+  # Pustaka sistem yang dibutuhkan Chromium (font, GTK, audio) — tanpa ini browser gagal start.
+  if command -v apt-get >/dev/null 2>&1; then
+    as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 \
+      libxdamage1 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2t64 2>/dev/null \
+      || as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 \
+        libxdamage1 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 2>/dev/null \
       || true
     as_root apt-get clean
-    SYS_CHROME="$(command -v chromium || command -v chromium-browser || true)"
-    if [ -n "$SYS_CHROME" ]; then
-      set_env_kv CHROMIUM_PATH "$SYS_CHROME"
-    else
-      mkdir -p "$DIR/.browsers"
-      PLAYWRIGHT_BROWSERS_PATH="$DIR/.browsers" "$DIR/.venv/bin/playwright" install --with-deps chromium
-    fi
-  else
-    mkdir -p "$DIR/.browsers"
-    PLAYWRIGHT_BROWSERS_PATH="$DIR/.browsers" "$DIR/.venv/bin/playwright" install chromium
   fi
 
   echo "[4/5] Mengunduh model AI (hapus latar, suara Bahasa Indonesia, Whisper ${WHISPER_CHOICE})..."

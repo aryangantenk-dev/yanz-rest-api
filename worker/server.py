@@ -376,6 +376,50 @@ DEVICES = {
 }
 
 
+# Chromium dari paket snap (bawaan Ubuntu 22.04/24.04) TIDAK bisa keluar jaringan di dalam LXC:
+# curl dapat 200 tetapi Chromium melaporkan ERR_INTERNET_DISCONNECTED. Karena itu snap ditolak
+# dan worker memakai Chromium bawaan Playwright (`playwright install chromium`).
+_SNAP_RE = re.compile(r"/(snap|snapd)/|/snap/bin/")
+
+
+def _usable_chrome(path: str | None) -> bool:
+    return bool(path) and not _SNAP_RE.search(path)
+
+
+def _bundled_chrome() -> str | None:
+    """Chromium milik Playwright di PLAYWRIGHT_BROWSERS_PATH (bila sudah diunduh)."""
+    root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
+    if not root or not Path(root).is_dir():
+        return None
+    for pat in ("chromium-*/chrome-linux/chrome", "chromium_headless_shell-*/chrome-linux/headless_shell"):
+        for f in sorted(Path(root).glob(pat), reverse=True):
+            if f.is_file() and os.access(f, os.X_OK):
+                return str(f)
+    return None
+
+
+async def _install_bundled_chrome() -> str | None:
+    """Unduh Chromium bawaan Playwright sekali (sekitar 170 MB) lalu pakai itu."""
+    root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
+    if not root:
+        return None
+    Path(root).mkdir(parents=True, exist_ok=True)
+    exe = str(Path(root) / ".venv" / "bin" / "playwright")
+    if not Path(exe).is_file():
+        exe = shutil.which("playwright") or ""
+    if not exe:
+        return None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            exe, "install", "chromium", stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
+        )
+        await asyncio.wait_for(proc.wait(), timeout=600)
+    except Exception as e:  # noqa: BLE001
+        print(f"[browser] gagal memasang Chromium bawaan: {e}", file=sys.stderr, flush=True)
+        return None
+    return _bundled_chrome()
+
+
 async def browser():
     global _browser, _playwright
     async with _browser_lock:
@@ -399,18 +443,28 @@ async def browser():
             ],
             "env": clean_env,
         }
+        # Urutan pilih browser: bawaan Playwright -> Chromium sistem non-snap -> Chromium bawaan
+        # yang diunduh saat itu juga. Snap selalu ditolak karena tidak bisa keluar jaringan di LXC.
+        bundled = _bundled_chrome()
         sys_bin = CHROMIUM or shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
-        has_bundled = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")).is_dir() and any(Path(os.environ["PLAYWRIGHT_BROWSERS_PATH"]).glob("chromium*"))
-        if CHROMIUM:
-            opts["executable_path"] = CHROMIUM
-        elif sys_bin and not has_bundled:
-            opts["executable_path"] = sys_bin
+        if not _usable_chrome(sys_bin):
+            if sys_bin:
+                print(f"[browser] mengabaikan Chromium snap/tidak layak: {sys_bin}", file=sys.stderr, flush=True)
+            sys_bin = None
+        if not bundled:
+            bundled = await _install_bundled_chrome()
+        chosen = bundled or sys_bin
+        if chosen:
+            opts["executable_path"] = chosen
+            print(f"[browser] memakai {chosen}", file=sys.stderr, flush=True)
         try:
             _browser = await _playwright.chromium.launch(**opts)
-        except Exception:
-            if "executable_path" in opts or not sys_bin:
+        except Exception as e:  # noqa: BLE001
+            print(f"[browser] gagal membuka {chosen or 'bawaan'}: {e}", file=sys.stderr, flush=True)
+            if "executable_path" not in opts:
                 raise
-            opts["executable_path"] = sys_bin
+            # Coba tanpa executable_path: Playwright akan memakai unduhan bawaannya.
+            opts.pop("executable_path", None)
             _browser = await _playwright.chromium.launch(**opts)
         return _browser
 
@@ -631,6 +685,7 @@ async def diag(request: web.Request, work: Path) -> web.Response:
                 "ok": True, "status": status, "url": page.url,
                 "title": (await page.title())[:120],
                 "turnstile": await _turnstile_present(page),
+                "executable": (await _browser_env(page)),
             }
         finally:
             await ctx.close()
@@ -642,6 +697,13 @@ async def diag(request: web.Request, work: Path) -> web.Response:
     out["ok"] = ok
     return jres(200 if ok else 502, out)
 
+
+async def _browser_env(page) -> str | None:
+    """Versi Chromium yang benar-benar dipakai, untuk memastikan bukan snap."""
+    try:
+        return str(await page.evaluate("navigator.userAgent"))
+    except Exception:  # noqa: BLE001
+        return None
 
 async def _turnstile_lib(page, kind: str) -> tuple[bool, str]:
     """Coba lewat pustaka playwright-captcha (bila terpasang). Mengembalikan (selesai, catatan)."""

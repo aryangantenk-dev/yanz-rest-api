@@ -77,7 +77,8 @@ Jawabannya memisahkan tiga hal: `steps.dns`, `steps.http` (koneksi biasa), dan `
 | --- | --- | --- |
 | `dns.ok=false` | Nama domain tidak terpecahkan dari VPS | Periksa resolver: `cat /etc/resolv.conf`, coba `getent hosts example.com` |
 | `http.ok=false` | VPS memang tidak bisa keluar ke alamat itu | Cek `curl -Iv https://example.com`; jaringan NAT VPS membatasi, atau situsnya memblokir IP data center |
-| `http.ok=true`, `chromium.ok=false` | Chromium di mesin itu bermasalah | Lihat kode `net::ERR_*` di pesan galat; jalankan `bash ctl.sh logs` |
+| `http.ok=true`, `chromium.ok=false` dengan `ERR_INTERNET_DISCONNECTED` | Ubuntu 22.04/24.04 punya Chromium **snap**, dan snap tidak bisa keluar jaringan di dalam LXC | Worker 1.2+ otomatis menolak snap dan memakai Chromium bawaan Playwright. Jalankan `bash install.sh` (mengunduh ±170 MB) lalu `bash ctl.sh restart` |
+| `http.ok=true`, `chromium.ok=false` (kode lain) | Chromium di mesin itu bermasalah | Lihat kode `net::ERR_*`; jalankan `bash ctl.sh logs` |
 | Semua `ok=true` | Jalur keluar sehat, masalahnya di situs target | Ulangi endpoint-nya |
 
 Galat Chromium kini diteruskan sebagai pesan yang spesifik (`ERR_CONNECTION_REFUSED`, `ERR_TIMED_OUT`, `ERR_TOO_MANY_REDIRECTS`, dan seterusnya) supaya tidak lagi muncul "halaman tidak bisa dibuka" tanpa keterangan.

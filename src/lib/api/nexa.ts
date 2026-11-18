@@ -62,7 +62,7 @@ export const nexaEndpoints: Endpoint[] = [
       const zone = need(sp, "zone", 10);
       if (!/^\d{4,20}$/.test(id)) throw new HttpError(400, "Parameter 'id' harus berupa angka.");
       if (!/^\d{1,6}$/.test(zone)) throw new HttpError(400, "Parameter 'zone' harus berupa angka.");
-      const data = await getJson("/api/ml", { id, zone });
+      const data = await getJson("/api/ml/", { id, zone });
       return { id, zone, username: data.username ?? null, region: data.region ?? null };
     },
   },
@@ -74,7 +74,7 @@ export const nexaEndpoints: Endpoint[] = [
     description: "Ambil profil publik sebuah akun Roblox: nama tampilan, avatar, bio, tanggal daftar, jumlah teman, pengikut, dan daftar game buatannya.",
     params: [{ name: "username", required: true, description: "Username Roblox.", example: "Linkmon99" }],
     handler: async ({ sp }) => {
-      const data = await getJson("/api/roblox", { username: handle(sp, "username") });
+      const data = await getJson("/api/roblox/", { username: handle(sp, "username") });
       const games = Array.isArray(data.games) ? (data.games as Record<string, unknown>[]) : [];
       return {
         id: data.id ?? null,
@@ -107,7 +107,7 @@ export const nexaEndpoints: Endpoint[] = [
     description: "Ambil data publik sebuah akun TikTok: nama, bio, foto profil, jumlah postingan, pengikut, mengikuti, dan total suka.",
     params: [{ name: "username", required: true, description: "Username TikTok tanpa '@'.", example: "nexadevv" }],
     handler: async ({ sp }) => {
-      const data = await getJson("/api/tiktokstalker", { username: handle(sp, "username") });
+      const data = await getJson("/api/tiktokstalker/", { username: handle(sp, "username") });
       return {
         id: data.id ?? null,
         username: data.username ?? null,
@@ -132,7 +132,7 @@ export const nexaEndpoints: Endpoint[] = [
     description: "Ambil data publik sebuah akun Instagram: nama, bio, foto profil, jumlah postingan, pengikut, mengikuti, dan status terverifikasi. Akun privat tetap bisa dilihat datanya, hanya isi postingannya yang tidak.",
     params: [{ name: "username", required: true, description: "Username Instagram tanpa '@'.", example: "instagram" }],
     handler: async ({ sp }) => {
-      const data = await getJson("/api/instagramstalker", { username: handle(sp, "username") });
+      const data = await getJson("/api/instagramstalker/", { username: handle(sp, "username") });
       return {
         id: data.id ?? null,
         username: data.username ?? null,
@@ -165,7 +165,7 @@ export const nexaEndpoints: Endpoint[] = [
     ],
     handler: async ({ sp }) => {
       const u = parseHttpUrl(need(sp, "url", 2000));
-      const target = new URL("/api/wink", BASE);
+      const target = new URL("/api/wink/", BASE);
       target.searchParams.set("url", u.toString());
       let res: Response;
       try {

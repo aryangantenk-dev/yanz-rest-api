@@ -167,24 +167,31 @@ export const nexaEndpoints: Endpoint[] = [
       const u = parseHttpUrl(need(sp, "url", 2000));
       const target = new URL("/api/wink/", BASE);
       target.searchParams.set("url", u.toString());
-      // Nexa menyimpan hasil (termasuk kegagalan) per URL, jadi setiap panggilan diberi penanda unik.
-      target.searchParams.set("r", String(Date.now()));
-      let res: Response;
-      try {
-        res = await fetch(target, {
-          headers: {
-            accept: "application/json, text/plain, */*",
-            "accept-language": "id-ID,id;q=0.9",
-            referer: `${BASE}/`,
-            "user-agent":
-              "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36",
-          },
-          cache: "no-store",
-          signal: AbortSignal.timeout(45000),
-        });
-      } catch {
-        throw new HttpError(502, "Server NexaDev tidak bisa dihubungi. Coba lagi nanti.");
+      // Nexa menyimpan hasil per URL, dan kegagalan lama ikut tersimpan. Endpoint ini
+      // mengirim permintaan bersih; bila sumber sedang bermasalah, ulangi sekali.
+      const attempt = async (): Promise<Response | null> => {
+        try {
+          return await fetch(target, {
+            headers: {
+              accept: "application/json, text/plain, */*",
+              "accept-language": "id-ID,id;q=0.9",
+              referer: `${BASE}/`,
+              "user-agent":
+                "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36",
+            },
+            cache: "no-store",
+            signal: AbortSignal.timeout(45000),
+          });
+        } catch {
+          return null;
+        }
+      };
+      let res = await attempt();
+      if (!res || !res.ok) {
+        await new Promise((r) => setTimeout(r, 1200));
+        res = (await attempt()) ?? res;
       }
+      if (!res) throw new HttpError(502, "Server NexaDev tidak bisa dihubungi. Coba lagi nanti.");
       const data = (await res.json().catch(() => null)) as
         | { status?: boolean; message?: string; result?: string; resultUrl?: string; data?: { url?: string; mode?: string; engine?: string } }
         | null;

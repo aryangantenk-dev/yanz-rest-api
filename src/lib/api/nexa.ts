@@ -170,7 +170,13 @@ export const nexaEndpoints: Endpoint[] = [
       let res: Response;
       try {
         res = await fetch(target, {
-          headers: { accept: "application/json", "user-agent": "Mozilla/5.0 (compatible; yanz.api/1.0)" },
+          headers: {
+            accept: "application/json, text/plain, */*",
+            "accept-language": "id-ID,id;q=0.9",
+            referer: `${BASE}/`,
+            "user-agent":
+              "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36",
+          },
           cache: "no-store",
           signal: AbortSignal.timeout(45000),
         });

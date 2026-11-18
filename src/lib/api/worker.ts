@@ -273,6 +273,7 @@ export const workerEndpoints: Endpoint[] = [
       const wait = Math.round(num(sp, "wait", 20, 3, 45));
       const selector = opt(sp, "selector").trim();
       if (selector && selector.length > 120) throw new HttpError(400, "Parameter 'selector' terlalu panjang (maks 120 karakter).");
+      if (!workerConfigured()) throw new HttpError(503, "Fitur ini belum aktif: WORKER_URL dan WORKER_KEY belum diatur di server.");
       const res = await callWorker(
         "turnstile",
         { url, wait, mode: choice(sp, "mode", ["auto", "klik", "library"], "auto"), selector },

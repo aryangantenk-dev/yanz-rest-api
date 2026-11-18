@@ -34,10 +34,12 @@ const GATE_RE = /id=["']verify["']/i;
 
 export class SflError extends Error {
   raw?: string;
-  constructor(message: string, raw?: string) {
+  status: number;
+  constructor(message: string, raw?: string, status = 502) {
     super(message);
     this.name = "SflError";
     this.raw = raw;
+    this.status = status;
   }
 }
 
@@ -258,7 +260,7 @@ export async function resolveSfl(input: string): Promise<SflResult> {
 
     const session = await api(page.url, "/api/session", { _token: makeToken(page.url) });
     if (session.captcha || session.passcode) {
-      throw new SflError("Tautan ini memakai captcha atau passcode, jadi belum bisa dibuka otomatis.", JSON.stringify(session));
+      throw new SflError("Tautan ini memakai captcha atau passcode, jadi belum bisa dibuka otomatis.", JSON.stringify(session), 422);
     }
 
     if (session.step === 1) {
@@ -308,7 +310,16 @@ export const sflEndpoints: Endpoint[] = [
       const raw = need(sp, "url", 2000);
       const match = raw.match(/(?:https?:\/\/)?(?:[a-z0-9-]+\.)*sfl\.gl(?:\/[^\s]*)?/i);
       if (!match) throw new HttpError(400, "Tautan harus dari domain sfl.gl.");
-      const result = await resolveSfl(match[0]);
+      let result: SflResult;
+      try {
+        result = await resolveSfl(match[0]);
+      } catch (e) {
+        if (e instanceof SflError) {
+          console.error("[sfl]", e.message, e.raw ?? "");
+          throw new HttpError(e.status, e.raw ? `${e.message} Detail: ${e.raw.slice(0, 300)}` : e.message);
+        }
+        throw e;
+      }
       return {
         target: result.url,
         host: result.host,

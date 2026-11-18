@@ -149,16 +149,17 @@ export const nexaEndpoints: Endpoint[] = [
     },
   },
   {
-    category: "canvas",
+    category: "image",
     slug: "wink",
-    kind: "image",
-    title: "Efek Wink",
-    description: "Beri efek animasi wink (kedipan mata) pada sebuah foto, dirender oleh layanan luar. Kirim tautan langsung ke gambarnya; hasilnya berkas gambar.",
+    kind: "json",
+    title: "Foto Jadi HD (Wink)",
+    description:
+      "Tingkatkan kualitas sebuah foto: wajah dipertajam dan dihaluskan oleh mesin BeautyPlus di balik layanan Wink. Kirim tautan langsung ke foto, hasilnya tautan gambar versi HD yang bisa langsung dipakai atau diunduh.",
     params: [
       {
         name: "url",
         required: true,
-        description: "Tautan langsung ke foto wajah (JPG atau PNG) yang bisa diakses publik.",
+        description: "Tautan langsung ke foto (JPG atau PNG) yang bisa diakses publik, sebaiknya berisi wajah yang jelas.",
         example: "https://clooud.my.id/uploder/uploads/XIxbPP.jpg",
       },
     ],
@@ -168,23 +169,26 @@ export const nexaEndpoints: Endpoint[] = [
       target.searchParams.set("url", u.toString());
       let res: Response;
       try {
-        res = await fetch(target, { headers: { accept: "image/*" }, cache: "no-store", signal: AbortSignal.timeout(30000) });
+        res = await fetch(target, {
+          headers: { accept: "application/json", "user-agent": "Mozilla/5.0 (compatible; yanz.api/1.0)" },
+          cache: "no-store",
+          signal: AbortSignal.timeout(45000),
+        });
       } catch {
         throw new HttpError(502, "Server NexaDev tidak bisa dihubungi. Coba lagi nanti.");
       }
-      const type = (res.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
-      if (!res.ok || !type.startsWith("image/")) {
-        const body = await res.text().catch(() => "");
-        let msg = "";
-        try {
-          const j = JSON.parse(body) as { message?: string };
-          msg = typeof j.message === "string" ? j.message : "";
-        } catch {
-          /* bukan JSON */
-        }
-        throw new HttpError(res.status === 429 ? 429 : 502, msg || "Layanan sumber gagal membuat efek wink untuk gambar itu.");
+      const data = (await res.json().catch(() => null)) as
+        | { status?: boolean; message?: string; result?: string; resultUrl?: string; data?: { url?: string; mode?: string; engine?: string } }
+        | null;
+      if (res.status === 429) throw new HttpError(429, "Batas 100 permintaan NexaDev sedang tercapai. Coba lagi beberapa saat lagi.");
+      const out = data?.resultUrl ?? data?.result ?? data?.data?.url;
+      if (!res.ok || !data || data.status === false || typeof out !== "string" || !out) {
+        throw new HttpError(
+          res.status === 400 || res.status === 404 ? 400 : 502,
+          data?.message || "Layanan sumber gagal memproses gambar itu. Coba foto lain yang wajahnya lebih jelas.",
+        );
       }
-      return new Response(res.body, { headers: { "content-type": type, "cache-control": "public, max-age=600" } });
+      return { source: u.toString(), result: out, engine: data.data?.engine ?? null, mode: data.data?.mode ?? null };
     },
   },
 ];

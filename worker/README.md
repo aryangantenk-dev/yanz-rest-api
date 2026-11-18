@@ -34,6 +34,35 @@ Setelah selesai:
 2. Cek dari browser: `<URL>/health` harus menampilkan `{"ok": true, ...}`.
 3. Di Vercel (**Settings → Environment Variables**) isi `WORKER_URL` dengan URL publik tadi dan `WORKER_KEY` dengan kunci yang dicetak skrip, lalu deploy ulang. Status sambungannya bisa dicek di `/api/health` (`"worker": "connected"`).
 
+## Pasang di NAT VPS (Nauval Cloud / cloud.mui.skin)
+
+NAT VPS hanya punya satu IPv4 publik yang dipakai bersama, jadi port `8080` tidak bisa dibuka langsung dari internet. Sambungkan lewat subdomain di panel **Managed Domain**: port tujuan `8080` (HTTP), lalu panel yang menerbitkan SSL-nya. HTTPS wajib, karena yanz.api memanggil worker lewat `https://`.
+
+1. Deploy LXC (Ubuntu 22.04/24.04) di panel, catat IP:port SSH-nya, masuk:
+   ```bash
+   ssh root@<IP> -p <PORT_SSH>
+   ```
+2. Pasang worker (satu baris, tanpa Docker; Chromium sistem dipakai bila ada):
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/aryangantenk-dev/yanz-rest-api/main/worker/install.sh | bash
+   ```
+   Skrip butuh RAM ±4 GB (paket **M** ke atas). Di paket **S** (2 GB) pasang dengan `MAX_JOBS=1`:
+   ```bash
+   MAX_JOBS=1 curl -fsSL https://raw.githubusercontent.com/aryangantenk-dev/yanz-rest-api/main/worker/install.sh | bash
+   ```
+3. Buka subdomain di **Managed Domain** → arahkan ke port `8080`, aktifkan SSL. Uji:
+   ```bash
+   curl -fsS https://<namamu>.cloud.mui.skin/health
+   ```
+   Harus menjawab `{"ok": true, ...}`.
+4. Ambil kuncinya, lalu isi `WORKER_URL` (tanpa garis miring di akhir) dan `WORKER_KEY` di Vercel → deploy ulang:
+   ```bash
+   cd ~/yanz/worker && bash ctl.sh status
+   ```
+5. Tambahkan `worker.key` di panel **Fair-use** bila ada batas koneksi; worker hanya butuh 1 port keluar.
+
+Catatan: NAT VPS dijeda/di-reinstall dari panel akan menghapus `~/yanz` beserta `.env` dan model. Simpan `worker/.env` (berisi `WORKER_KEY`) di tempat lain supaya tinggal salin balik dan `bash install.sh` ulang.
+
 ## Perintah sehari-hari
 
 Jalankan dari folder `worker/` (biasanya `~/yanz-rest-api/worker`):

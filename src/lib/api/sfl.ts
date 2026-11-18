@@ -130,8 +130,9 @@ function makeToken(pageUrl: string): string {
   return decodeURIComponent(xsrf).slice(0, Math.max(0, 128 - tail.length)) + tail;
 }
 
-async function api(page: string, path: string, json: unknown): Promise<Record<string, unknown>> {
+async function api(page: string, path: string, json: unknown, trace?: string[]): Promise<Record<string, unknown>> {
   const res = await request(new URL(path, page).href, { method: "POST", json, referer: page });
+  trace?.push(`POST ${path} ${JSON.stringify(json)} -> ${res.status} ${res.text.slice(0, 400)}`);
   if (res.status < 200 || res.status >= 300) {
     if (res.status === 419) throw new SflError("Sesi/token ditolak server (419). Coba lagi.", `${path} :: ${res.text}`);
     if (res.status === 422) throw new SflError("Permintaan ditolak validasi server (422).", `${path} :: ${res.text}`);
@@ -245,12 +246,15 @@ export type SflResult = {
   chain: Hop[];
   /** Jumlah putaran gate verifikasi yang dilewati. */
   rounds: number;
+  /** Jejak panggilan API, dipakai saat mode debug. */
+  trace: string[];
 };
 
 /** Buka satu tautan sfl.gl sampai tautan tujuannya ketemu. */
 export async function resolveSfl(input: string): Promise<SflResult> {
   const startUrl = /^https?:\/\//i.test(input) ? input : `https://${input}`;
   const chain: Hop[] = [];
+  const trace: string[] = [];
   let page = await navigate(startUrl, "", chain);
   let rounds = 0;
 
@@ -258,14 +262,14 @@ export async function resolveSfl(input: string): Promise<SflResult> {
     if (!page.gate) throw new SflError("Halaman verifikasi safelink tidak ditemukan (mungkin strukturnya berubah).", page.url);
     rounds = round + 1;
 
-    const session = await api(page.url, "/api/session", { _token: makeToken(page.url) });
+    const session = await api(page.url, "/api/session", { _token: makeToken(page.url) }, trace);
     if (session.captcha || session.passcode) {
       throw new SflError("Tautan ini memakai captcha atau passcode, jadi belum bisa dibuka otomatis.", JSON.stringify(session), 422);
     }
 
     if (session.step === 1) {
       await sleep(12000);
-      const verify = await api(page.url, "/api/verify", { _a: 0 });
+      const verify = await api(page.url, "/api/verify", { _a: 0 }, trace);
       const next = new URL(typeof verify.target === "string" && verify.target ? verify.target : "/redirect.php", page.url).href;
       page = await navigate(next, page.url, chain);
       continue;
@@ -275,15 +279,15 @@ export async function resolveSfl(input: string): Promise<SflResult> {
       await sleep(5000);
       const key = Math.floor(Math.random() * 1000);
       const size = `${(VIEWPORT.width + key) * 2}.${(VIEWPORT.height + key) * 2}`;
-      const go = await api(page.url, "/api/go", { key, size, ado: null });
+      const go = await api(page.url, "/api/go", { key, size, ado: null }, trace);
       if (typeof go.url !== "string" || !go.url) throw new SflError("Jawaban /api/go tidak berisi url.", JSON.stringify(go));
       const final = await finalize(new URL(go.url, page.url).href, page.url, chain);
       const cleaned = new URL(final);
       cleaned.pathname = cleaned.pathname.replace(/\/{2,}/g, "/");
-      return { url: cleaned.href, host: cleaned.hostname, chain, rounds };
+      return { url: cleaned.href, host: cleaned.hostname, chain, rounds, trace };
     }
 
-    throw new SflError(`Langkah verifikasi tidak dikenal: ${String(session.step)}`, JSON.stringify(session));
+    throw new SflError(`Langkah verifikasi tidak dikenal: ${String(session.step)}`, `${JSON.stringify(session)} :: ${trace.join(" | ")}`);
   }
 
   throw new SflError(`Putaran verifikasi terlalu banyak (>${MAX_ROUND}).`, chain.map((c) => c.url).join(" -> "));
@@ -320,6 +324,7 @@ export const sflEndpoints: Endpoint[] = [
         }
         throw e;
       }
+      if (sp.get("debug") === "1") return { target: result.url, trace: result.trace };
       return {
         target: result.url,
         host: result.host,

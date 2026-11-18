@@ -279,7 +279,8 @@ export async function resolveSfl(input: string): Promise<SflResult> {
     if (!page.gate) {
       // Halaman tidak memuat form verifikasi: tautan langsung dialihkan ke tujuan.
       if (!isSflHost(new URL(page.url).hostname)) {
-        return { url: page.url, host: new URL(page.url).hostname, chain, rounds, trace };
+        const final = await finish(page.url, chain[chain.length - 2]?.url ?? "", chain);
+        return { url: final, host: new URL(final).hostname, chain, rounds, trace };
       }
       throw new SflError("Halaman verifikasi safelink tidak ditemukan (mungkin strukturnya berubah).", chain.map((c) => `${c.url} (${c.status})`).join(" -> "));
     }
@@ -312,7 +313,8 @@ export async function resolveSfl(input: string): Promise<SflResult> {
     const next = typeof session.target === "string" && session.target ? session.target : page.url;
     page = await navigate(new URL(next, page.url).href, page.url, chain);
     if (!page.gate && !isSflHost(new URL(page.url).hostname)) {
-      return { url: page.url, host: new URL(page.url).hostname, chain, rounds, trace };
+      const final = await finish(page.url, page.url, chain);
+      return { url: final, host: new URL(final).hostname, chain, rounds, trace };
     }
   }
 

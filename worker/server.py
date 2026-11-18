@@ -394,6 +394,8 @@ async def browser():
                 "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
                 "--hide-scrollbars", "--mute-audio", "--no-proxy-server", "--disable-background-networking",
                 "--disable-features=NetworkServiceSandbox", "--dns-prefetch-disable", "--no-first-run",
+                # Sebagian jaringan VPS memutus HTTP/2; HTTP/1.1 lebih stabil untuk keluar.
+                "--disable-http2",
             ],
             "env": clean_env,
         }
@@ -462,12 +464,30 @@ async def open_page(url: str, device: str, wait_ms: int, dark: bool):
                 raise Fail(400, "Alamat tidak ditemukan. Periksa lagi tautannya.")
             if "ERR_BLOCKED_BY_CLIENT" in msg or "ERR_ABORTED" in msg:
                 raise Fail(400, "Alamat itu tidak diizinkan atau bukan halaman web.")
-            print(f"[halaman] {msg.splitlines()[0][:200]}", file=sys.stderr, flush=True)
+            first = msg.splitlines()[0][:200]
+            # Kode galat Chromium dipakai untuk memberi pesan yang bisa ditindaklanjuti, bukan
+            # "tidak bisa dibuka" yang tidak menjelaskan apa pun ke pemanggil.
+            code = ""
+            m = re.search(r"net::(ERR_[A-Z_]+)", msg)
+            if m:
+                code = m.group(1)
+            print(f"[halaman] {first}", file=sys.stderr, flush=True)
             if "ERR_CERT" in msg or "ERR_SSL" in msg:
                 raise Fail(502, "Sertifikat keamanan halaman itu bermasalah, jadi tidak bisa dibuka.")
-            if "ERR_CONNECTION" in msg or "ERR_TIMED_OUT" in msg or "ERR_ADDRESS_UNREACHABLE" in msg:
-                raise Fail(502, "Situs itu tidak merespons.")
-            raise Fail(502, "Halaman itu tidak bisa dibuka.")
+            if code in ("ERR_NAME_NOT_RESOLVED", "ERR_NAME_RESOLUTION_FAILED"):
+                raise Fail(400, "Alamat tidak ditemukan. Periksa lagi tautannya.")
+            if code in ("ERR_CONNECTION_REFUSED", "ERR_CONNECTION_RESET", "ERR_CONNECTION_CLOSED",
+                        "ERR_CONNECTION_TIMED_OUT", "ERR_TIMED_OUT", "ERR_ADDRESS_UNREACHABLE",
+                        "ERR_INTERNET_DISCONNECTED", "ERR_TUNNEL_CONNECTION_FAILED", "ERR_PROXY_CONNECTION_FAILED"):
+                raise Fail(502, f"Situs itu tidak merespons dari server worker ({code}).")
+            if code == "ERR_TOO_MANY_REDIRECTS":
+                raise Fail(502, "Situs itu mengalihkan terlalu banyak kali sebelum halamannya terbuka.")
+            if code in ("ERR_BLOCKED_BY_CLIENT", "ERR_BLOCKED_BY_RESPONSE"):
+                raise Fail(400, "Alamat itu tidak diizinkan atau menolak koneksi dari server worker.")
+            if code == "ERR_ABORTED":
+                # Terjadi pada unduhan atau pengalihan yang diputus halaman itu sendiri.
+                raise Fail(504, "Halaman itu membatalkan pemuatan sebelum selesai. Coba lagi.")
+            raise Fail(502, f"Halaman itu tidak bisa dibuka{': ' + code if code else ''}.")
         if wait_ms:
             await page.wait_for_timeout(wait_ms)
         return ctx, page, (res.status if res else 0)
@@ -564,51 +584,144 @@ async def _turnstile_token(page) -> str:
     return ""
 
 
-async def turnstile(request: web.Request, work: Path) -> web.Response:
+def turnstile_target(request: web.Request) -> tuple[str, str, int]:
+    """URL dan lama tunggu; tanpa membuka browser (dipakai juga oleh /v1/diag)."""
+    url = check_url(request.query.get("url", ""))
+    return url, (urlsplit(url).hostname or ""), qint(request, "wait", 20, 3, 45) * 1000
+
+
+async def diag(request: web.Request, work: Path) -> web.Response:
+    """Cek jalur keluar worker ke satu alamat: DNS, HTTP langsung, lalu Chromium."""
     url = check_url(request.query.get("url", ""))
     host = urlsplit(url).hostname or ""
+    out: dict = {"url": url, "host": host, "steps": {}}
+    try:
+        out["steps"]["dns"] = {"ok": True, "ips": (await resolve_public(host))[:3]}
+    except Fail as e:
+        out["steps"]["dns"] = {"ok": False, "error": e.message}
+        return jres(400, out)
+    # HTTP biasa (aiohttp) dulu: memisahkan masalah jaringan dari masalah Chromium.
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, allow_redirects=True) as r:
+                out["steps"]["http"] = {"ok": True, "status": r.status, "final_url": str(r.url)}
+    except Exception as e:  # noqa: BLE001
+        out["steps"]["http"] = {"ok": False, "error": f"{type(e).__name__}: {e}"[:300]}
+    # Chromium: laporkan kode galat net::ERR_* apa adanya untuk menelusuri penyebabnya.
+    try:
+        ctx, page, status = await open_page(url, "desktop", 0, False)
+        try:
+            out["steps"]["chromium"] = {
+                "ok": True, "status": status, "url": page.url,
+                "title": (await page.title())[:120],
+                "turnstile": await _turnstile_present(page),
+            }
+        finally:
+            await ctx.close()
+    except Fail as e:
+        out["steps"]["chromium"] = {"ok": False, "status": e.status, "error": e.message}
+    except Exception as e:  # noqa: BLE001
+        out["steps"]["chromium"] = {"ok": False, "error": f"{type(e).__name__}: {e}"[:300]}
+    ok = all(bool(v.get("ok")) for v in out["steps"].values())
+    out["ok"] = ok
+    return jres(200 if ok else 502, out)
+
+
+async def _turnstile_lib(page, kind: str) -> tuple[bool, str]:
+    """Coba lewat pustaka playwright-captcha (bila terpasang). Mengembalikan (selesai, catatan)."""
+    try:
+        from playwright_captcha import CaptchaType, ClickSolver, FrameworkType
+    except Exception as e:  # noqa: BLE001
+        return False, f"playwright-captcha tidak tersedia ({type(e).__name__})"
+    ctype = CaptchaType.RECAPTCHA_V2 if kind == "recaptcha" else CaptchaType.CLOUDFLARE_TURNSTILE
+    try:
+        async with ClickSolver(framework=FrameworkType.PLAYWRIGHT, page=page) as solver:
+            await solver.solve_captcha(captcha_container=page, captcha_type=ctype)
+        return True, "diselesaikan lewat playwright-captcha"
+    except Exception as e:  # noqa: BLE001
+        return False, f"playwright-captcha gagal: {type(e).__name__}: {e}"[:200]
+
+
+def _custom_sel(value: str) -> str | None:
+    """Selektor kotak verifikasi khusus situsmu, mis. #cf-turnstile atau .g-recaptcha."""
+    v = (value or "").strip()
+    if not v or len(v) > 120:
+        return None
+    if not re.fullmatch(r"[#.\[\]a-zA-Z0-9_\-=:'\"\s>+~*()]+", v):
+        return None
+    return v
+
+
+async def turnstile(request: web.Request, work: Path) -> web.Response:
+    url, host, wait_ms = turnstile_target(request)
     await resolve_public(host)
-    wait_ms = qint(request, "wait", 20, 3, 45) * 1000
-    ctx, page, status = await open_page(url, "desktop", 1200, False)
+    selector = _custom_sel(request.query.get("selector", ""))
+    mode = qpick(request, "mode", ["auto", "klik", "library"], "auto")
+    ctx, page, status = await open_page(url, "desktop", 1500, False)
     try:
         detected = await _turnstile_present(page)
+        kind = "none"
+        if detected:
+            kind = "recaptcha" if await page.locator(".g-recaptcha, iframe[src*='recaptcha']").count() else "turnstile"
         clicked = False
         solved = False
-        # Klik kotak centangnya seperti pengunjung biasa. Playwright tanpa patch stealth bisa
-        # gagal di sini; itu dilaporkan apa adanya, bukan diulang terus.
-        for sel in ["iframe[src*='challenges.cloudflare.com']", "#cf-turnstile", ".cf-turnstile"]:
-            try:
-                box = page.locator(sel).first()
-                if not await box.count():
+        note = ""
+
+        # 1) Pustaka playwright-captcha (tidak terlihat di sini) bila tersedia.
+        if mode in ("auto", "library") and detected:
+            solved, note = await _turnstile_lib(page, kind)
+            clicked = solved
+
+        # 2) Cara klik: klik kotak verifikasi seperti pengunjung biasa.
+        if not solved and mode in ("auto", "klik"):
+            targets = ([selector] if selector else []) + [
+                "iframe[src*='challenges.cloudflare.com']",
+                "#cf-turnstile",
+                ".cf-turnstile",
+            ] + (["#g-recaptcha", ".g-recaptcha"] if kind == "recaptcha" else [])
+            for sel in targets:
+                try:
+                    box = page.locator(sel).first()
+                    if not await box.count():
+                        continue
+                    await box.scroll_into_view_if_needed(timeout=2000)
+                    await box.click(timeout=3000, position={"x": 28, "y": 28})
+                    clicked = True
+                    break
+                except Exception:
                     continue
-                await box.scroll_into_view_if_needed(timeout=2000)
-                await box.click(timeout=3000, position={"x": 28, "y": 28})
-                clicked = True
-                break
-            except Exception:
-                continue
-        deadline = time.time() + wait_ms / 1000
-        while time.time() < deadline:
-            await page.wait_for_timeout(1000)
-            still = await _turnstile_present(page)
-            token = await _turnstile_token(page)
-            if token or not still:
-                solved = True
-                break
+            deadline = time.time() + wait_ms / 1000
+            while time.time() < deadline:
+                await page.wait_for_timeout(1000)
+                still = await _turnstile_present(page)
+                token = await _turnstile_token(page)
+                if token or not still:
+                    solved = True
+                    break
+
         token = await _turnstile_token(page)
         title = (await page.title())[:200]
         final_url = page.url
         text = await page.evaluate("document.body ? document.body.innerText.slice(0, 400) : ''")
+        if not solved and not note:
+            note = (
+                "Tantangan tidak selesai. Situs itu mungkin memakai pemeriksaan tambahan (skor bot atau proteksi "
+                "interaktif) yang tidak bisa dilewati dari server ini. Coba mode=klik dengan selector kotak verifikasi "
+                "situsmu, atau pasang playwright-captcha di worker."
+            )
         return jres(200 if solved else 422, {
             "url": final_url,
             "host": host,
             "page_status": status,
             "title": title,
-            "kind": "turnstile" if detected else "none",
+            "kind": kind,
+            "mode": mode,
+            "selector": selector,
             "clicked": clicked,
             "solved": solved,
             "token": token or None,
-            "note": None if solved else "Tantangan tidak selesai. Situs itu mungkin memakai pemeriksaan tambahan (skor bot atau proteksi interaktif) yang tidak bisa dilewati dari server ini.",
+            "note": None if solved else note,
             "text": text,
         })
     finally:
@@ -910,7 +1023,7 @@ async def tts(request: web.Request, work: Path) -> web.Response:
     return jres(200, {**publish(out, fmt), "duration": round(seconds, 2), "voice": voice["name"], "characters": len(text)})
 
 
-JOBS = {"ssweb": ssweb, "web2pdf": web2pdf, "turnstile": turnstile, "tomp3": tomp3, "togif": togif, "compress": compress, "sticker": sticker, "removebg": removebg, "ocr": ocr, "transcribe": transcribe, "tts": tts}
+JOBS = {"ssweb": ssweb, "web2pdf": web2pdf, "turnstile": turnstile, "diag": diag, "tomp3": tomp3, "togif": togif, "compress": compress, "sticker": sticker, "removebg": removebg, "ocr": ocr, "transcribe": transcribe, "tts": tts}
 
 
 # ---------------------------------------------------------------------------

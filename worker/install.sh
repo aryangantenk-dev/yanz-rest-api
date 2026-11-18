@@ -306,6 +306,12 @@ install_native() {
       exit 1
     fi
   fi
+  # Pustaka solver captcha bersifat opsional: bila gagal dipasang (butuh versi Python tertentu),
+  # fitur turnstile tetap jalan dengan cara klik biasa.
+  if ! "$DIR/.venv/bin/pip" install -q --no-cache-dir --retries 3 "playwright-captcha>=0.1.4,<0.2"; then
+    echo "Peringatan: playwright-captcha tidak terpasang; turnstile memakai cara klik biasa." >&2
+  fi
+
   # rapidocr menarik opencv (versi GUI). Di server tanpa layar, ganti ke varian headless.
   if "$DIR/.venv/bin/pip" show opencv-python >/dev/null 2>&1; then
     "$DIR/.venv/bin/pip" uninstall -y -q opencv-python >/dev/null 2>&1 || true

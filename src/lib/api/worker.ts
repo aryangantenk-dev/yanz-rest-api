@@ -235,6 +235,19 @@ const DEVICES = ["desktop", "tablet", "mobile"] as const;
 
 export const workerEndpoints: Endpoint[] = [
   {
+    category: "tools", slug: "worker-diag", kind: "json",
+    pro: true,
+    title: "Diagnosa Server Pengolah",
+    description:
+      "Periksa kenapa satu alamat gagal dibuka oleh worker: DNS, koneksi HTTP biasa, lalu Chromium, masing-masing dilaporkan terpisah beserta kode galatnya. Dipakai untuk menelusuri galat 502 pada endpoint yang memakai browser (ssweb, web2pdf, turnstile). Khusus paket Pro ke atas.",
+    params: [{ name: "url", required: true, description: "Alamat yang ingin diperiksa.", example: "https://example.com" }],
+    handler: async ({ sp }) => {
+      const url = parseHttpUrl(need(sp, "url", 2000)).toString();
+      const res = await callWorker("diag", { url }, null, 90_000);
+      return (await res.json().catch(() => null)) ?? { ok: false, note: "Jawaban worker tidak bisa dibaca." };
+    },
+  },
+  {
     category: "tools", slug: "turnstile", kind: "json",
     pro: true,
     title: "Bypass Cloudflare Turnstile",
@@ -243,11 +256,29 @@ export const workerEndpoints: Endpoint[] = [
     params: [
       { name: "url", required: true, description: "Alamat halaman yang memasang Turnstile dan kamu kelola sendiri.", example: "https://example.com" },
       { name: "wait", description: "Batas waktu menunggu tantangan selesai, 3 sampai 45 detik. Default 20.", example: "20" },
+      {
+        name: "mode",
+        description: "Cara menyelesaikan: auto (coba pustaka lalu klik), klik (klik kotak verifikasi), atau library (pakai playwright-captcha bila terpasang di worker).",
+        example: "auto",
+        options: ["auto", "klik", "library"],
+      },
+      {
+        name: "selector",
+        description: "Opsional: selektor CSS kotak verifikasi di situsmu, mis. #cf-turnstile atau .g-recaptcha. Dipakai lebih dulu sebelum selektor bawaan.",
+        example: "#cf-turnstile",
+      },
     ],
     handler: async ({ sp }) => {
       const url = parseHttpUrl(need(sp, "url", 2000)).toString();
       const wait = Math.round(num(sp, "wait", 20, 3, 45));
-      const res = await callWorker("turnstile", { url, wait }, null, (wait + 30) * 1000);
+      const selector = opt(sp, "selector").trim();
+      if (selector && selector.length > 120) throw new HttpError(400, "Parameter 'selector' terlalu panjang (maks 120 karakter).");
+      const res = await callWorker(
+        "turnstile",
+        { url, wait, mode: choice(sp, "mode", ["auto", "klik", "library"], "auto"), selector },
+        null,
+        (wait + 40) * 1000,
+      );
       const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;
       if (!data) throw new HttpError(502, "Server pengolah mengirim jawaban yang tidak valid.");
       return {

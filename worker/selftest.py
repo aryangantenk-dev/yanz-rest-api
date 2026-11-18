@@ -205,7 +205,15 @@ def main() -> int:
             raise RuntimeError(f"jawaban tak terduga: {code}")
         return f"terdeteksi={body.get('kind')} selesai={body.get('solved')}"
 
-    for name, fn in (("health", health), ("kunci", auth), ("penjaga", guard), ("ssweb", ssweb), ("web2pdf", web2pdf), ("turnstile", turnstile), ("tomp3", tomp3), ("togif", togif),
+    def diag():
+        code, _, raw = call("diag", {"url": "https://example.com"})
+        body = json.loads(raw or b"{}")
+        steps = body.get("steps", {})
+        if not steps.get("dns", {}).get("ok"):
+            raise RuntimeError("DNS gagal: " + str(steps.get("dns")))
+        return f"http={steps.get('http', {}).get('status')} chromium={'ok' if steps.get('chromium', {}).get('ok') else steps.get('chromium', {}).get('error')}"
+
+    for name, fn in (("health", health), ("kunci", auth), ("penjaga", guard), ("diag", diag), ("ssweb", ssweb), ("web2pdf", web2pdf), ("turnstile", turnstile), ("tomp3", tomp3), ("togif", togif),
                      ("compress", compress), ("sticker", sticker), ("removebg", removebg), ("ocr", ocr), ("tts", tts), ("transcribe", transcribe)):
         check(name, fn)
 

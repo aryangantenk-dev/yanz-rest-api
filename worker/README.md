@@ -63,6 +63,34 @@ NAT VPS hanya punya satu IPv4 publik yang dipakai bersama, jadi port `8080` tida
 
 Catatan: NAT VPS dijeda/di-reinstall dari panel akan menghapus `~/yanz` beserta `.env` dan model. Simpan `worker/.env` (berisi `WORKER_KEY`) di tempat lain supaya tinggal salin balik dan `bash install.sh` ulang.
 
+## Kalau halaman gagal dibuka (502)
+
+Mulai dari diagnosa, bukan menebak. Buka:
+
+```bash
+curl -sS "https://www.yanzapi.my.id/api/tools/worker-diag?url=https://example.com&apikey=<KEY_PRO>"
+```
+
+Jawabannya memisahkan tiga hal: `steps.dns`, `steps.http` (koneksi biasa), dan `steps.chromium`. Dari situ kelihatan penyebabnya:
+
+| Gejala | Arti | Tindakan |
+| --- | --- | --- |
+| `dns.ok=false` | Nama domain tidak terpecahkan dari VPS | Periksa resolver: `cat /etc/resolv.conf`, coba `getent hosts example.com` |
+| `http.ok=false` | VPS memang tidak bisa keluar ke alamat itu | Cek `curl -Iv https://example.com`; jaringan NAT VPS membatasi, atau situsnya memblokir IP data center |
+| `http.ok=true`, `chromium.ok=false` | Chromium di mesin itu bermasalah | Lihat kode `net::ERR_*` di pesan galat; jalankan `bash ctl.sh logs` |
+| Semua `ok=true` | Jalur keluar sehat, masalahnya di situs target | Ulangi endpoint-nya |
+
+Galat Chromium kini diteruskan sebagai pesan yang spesifik (`ERR_CONNECTION_REFUSED`, `ERR_TIMED_OUT`, `ERR_TOO_MANY_REDIRECTS`, dan seterusnya) supaya tidak lagi muncul "halaman tidak bisa dibuka" tanpa keterangan.
+
+## Turnstile
+
+`/api/tools/turnstile` mencoba dua cara berurutan:
+
+1. **library** — pustaka `playwright-captcha` (dipasang `install.sh`; kalau gagal dipasang, worker tetap jalan).
+2. **klik** — mengeklik kotak verifikasi seperti pengunjung biasa, memakai selektor bawaan atau `selector` milikmu.
+
+Bila keduanya tidak berhasil, jawabannya tetap 422 dengan `solved: false` dan `note` yang menjelaskan sebabnya — bukan mengaku berhasil. Untuk Turnstile yang sangat ketat, jalur yang lazim dipakai adalah patch stealth (camoufox/patchright) atau solver berbasis API; keduanya tidak dipasang diam-diam di repo ini.
+
 ## Perintah sehari-hari
 
 Jalankan dari folder `worker/` (biasanya `~/yanz-rest-api/worker`):

@@ -331,6 +331,7 @@ install_native() {
     set_env_kv CHROMIUM_PATH "$SYS_CHROME"
   fi
   mkdir -p "$DIR/.browsers"
+  set_env_kv PLAYWRIGHT_BROWSERS_PATH "$DIR/.browsers"
   PLAYWRIGHT_BROWSERS_PATH="$DIR/.browsers" "$DIR/.venv/bin/playwright" install chromium \
     || PLAYWRIGHT_BROWSERS_PATH="$DIR/.browsers" "$DIR/.venv/bin/playwright" install chromium
   if [ -z "$(find "$DIR/.browsers" -maxdepth 3 -name 'chrome' -o -maxdepth 3 -name 'headless_shell' 2>/dev/null | head -n 1)" ]; then

@@ -362,6 +362,10 @@ def publish(path: Path, ext: str) -> dict:
 _browser = None
 _playwright = None
 _browser_lock = asyncio.Lock()
+# Rangkaian argumen Chromium yang terbukti bisa keluar jaringan di mesin ini. Di sebagian LXC,
+# proses jaringan Chromium terpisah gagal total (ERR_INTERNET_DISCONNECTED) dan hanya mode
+# single-process yang jalan; yang berhasil diingat supaya tidak diuji ulang tiap permintaan.
+_launch_profile = "normal"
 
 DEVICES = {
     "desktop": {"viewport": {"width": 1366, "height": 768}, "device_scale_factor": 1, "is_mobile": False, "user_agent": UA},
@@ -420,6 +424,89 @@ async def _install_bundled_chrome() -> str | None:
     return _bundled_chrome()
 
 
+# Rangkaian argumen Chromium, dari yang paling ringan sampai paling "paksa" untuk LXC.
+_BASE_ARGS = [
+    "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
+    "--hide-scrollbars", "--mute-audio", "--no-proxy-server", "--disable-background-networking",
+    "--disable-features=NetworkServiceSandbox", "--dns-prefetch-disable", "--no-first-run",
+    "--disable-http2",
+]
+PROFILES = {
+    "normal": [],
+    # Proses jaringan tetap di dalam proses utama: menyembuhkan ERR_INTERNET_DISCONNECTED
+    # pada LXC yang memblokir network service Chromium.
+    "single": ["--single-process"],
+    # Lapis terakhir: matikan sandbox proses dan Network Service sepenuhnya.
+    "bridge": ["--single-process", "--disable-features=NetworkService,NetworkServiceInProcess,VizDisplayCompositor"],
+}
+
+
+async def _launch(executable: str | None, profile: str, clean_env: dict):
+    opts: dict = {"args": _BASE_ARGS + PROFILES[profile], "env": clean_env, "chromium_sandbox": False}
+    if executable:
+        opts["executable_path"] = executable
+    return await _playwright.chromium.launch(**opts)
+
+
+async def _pick_browser(clean_env: dict):
+    """Coba tiap browser x tiap profil sampai satu benar-benar bisa membuka halaman."""
+    global _launch_profile
+    bundled = _bundled_chrome()
+    sys_bin = CHROMIUM or shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
+    if not _usable_chrome(sys_bin):
+        if sys_bin:
+            print(f"[browser] mengabaikan Chromium snap/tidak layak: {sys_bin}", file=sys.stderr, flush=True)
+        sys_bin = None
+    if not bundled:
+        bundled = await _install_bundled_chrome()
+    candidates = [c for c in (bundled, sys_bin, None) if c is not False]
+    order = [_launch_profile] + [p for p in ("normal", "single", "bridge") if p != _launch_profile]
+    last: Exception | None = None
+    for exe in candidates:
+        for profile in order:
+            try:
+                b = await _launch(exe, profile, clean_env)
+            except Exception as e:  # noqa: BLE001
+                last = e
+                continue
+            # Benar-benar diuji: buka halaman kosong lalu periksa kanal jaringan hidup.
+            ok = await _probe(b)
+            if ok:
+                _launch_profile = profile
+                print(f"[browser] aktif: {exe or 'bawaan'} profil={profile}", file=sys.stderr, flush=True)
+                return b
+            await b.close()
+            print(f"[browser] gagal mengakses jaringan: {exe or 'bawaan'} profil={profile}", file=sys.stderr, flush=True)
+    if last:
+        raise last
+    raise RuntimeError("Tidak ada Chromium yang bisa dipakai")
+
+
+async def _probe(b) -> bool:
+    """Pastikan browser bisa membuka halaman sungguhan, bukan hanya start."""
+    try:
+        ctx = await b.new_context()
+        page = await ctx.new_page()
+        try:
+            await page.goto("http://127.0.0.1:1/", timeout=8000)
+            return False
+        except Exception as e:  # noqa: BLE001
+            msg = str(e)
+            # Koneksi ditolak = jaringan berjalan. ERR_INTERNET_DISCONNECTED = jaringan mati.
+            if "ERR_INTERNET_DISCONNECTED" in msg or "ERR_NAME_NOT_RESOLVED" in msg:
+                return False
+            if "ERR_CONNECTION_REFUSED" in msg or "ERR_CONNECTION_RESET" in msg:
+                return True
+            return False
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        try:
+            await ctx.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 async def browser():
     global _browser, _playwright
     async with _browser_lock:
@@ -433,39 +520,7 @@ async def browser():
         # valid; Chromium lalu mengira tidak ada jaringan (ERR_INTERNET_DISCONNECTED). Proxy
         # dibuang dari lingkungan proses dan pemakaian proxy dimatikan.
         clean_env = {k: v for k, v in os.environ.items() if "proxy" not in k.lower()}
-        opts = {
-            "args": [
-                "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-                "--hide-scrollbars", "--mute-audio", "--no-proxy-server", "--disable-background-networking",
-                "--disable-features=NetworkServiceSandbox", "--dns-prefetch-disable", "--no-first-run",
-                # Sebagian jaringan VPS memutus HTTP/2; HTTP/1.1 lebih stabil untuk keluar.
-                "--disable-http2",
-            ],
-            "env": clean_env,
-        }
-        # Urutan pilih browser: bawaan Playwright -> Chromium sistem non-snap -> Chromium bawaan
-        # yang diunduh saat itu juga. Snap selalu ditolak karena tidak bisa keluar jaringan di LXC.
-        bundled = _bundled_chrome()
-        sys_bin = CHROMIUM or shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
-        if not _usable_chrome(sys_bin):
-            if sys_bin:
-                print(f"[browser] mengabaikan Chromium snap/tidak layak: {sys_bin}", file=sys.stderr, flush=True)
-            sys_bin = None
-        if not bundled:
-            bundled = await _install_bundled_chrome()
-        chosen = bundled or sys_bin
-        if chosen:
-            opts["executable_path"] = chosen
-            print(f"[browser] memakai {chosen}", file=sys.stderr, flush=True)
-        try:
-            _browser = await _playwright.chromium.launch(**opts)
-        except Exception as e:  # noqa: BLE001
-            print(f"[browser] gagal membuka {chosen or 'bawaan'}: {e}", file=sys.stderr, flush=True)
-            if "executable_path" not in opts:
-                raise
-            # Coba tanpa executable_path: Playwright akan memakai unduhan bawaannya.
-            opts.pop("executable_path", None)
-            _browser = await _playwright.chromium.launch(**opts)
+        _browser = await _pick_browser(clean_env)
         return _browser
 
 

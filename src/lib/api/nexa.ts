@@ -167,6 +167,8 @@ export const nexaEndpoints: Endpoint[] = [
       const u = parseHttpUrl(need(sp, "url", 2000));
       const target = new URL("/api/wink/", BASE);
       target.searchParams.set("url", u.toString());
+      // Nexa menyimpan hasil (termasuk kegagalan) per URL, jadi setiap panggilan diberi penanda unik.
+      target.searchParams.set("r", String(Date.now()));
       let res: Response;
       try {
         res = await fetch(target, {

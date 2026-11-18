@@ -235,6 +235,29 @@ const DEVICES = ["desktop", "tablet", "mobile"] as const;
 
 export const workerEndpoints: Endpoint[] = [
   {
+    category: "tools", slug: "turnstile", kind: "json",
+    pro: true,
+    title: "Bypass Cloudflare Turnstile",
+    description:
+      "Lewati kotak verifikasi Cloudflare Turnstile di halaman milikmu sendiri, lalu kembalikan token dan isi halamannya. Worker membuka halaman di Chromium, mengeklik kotak verifikasi seperti pengunjung biasa, dan menunggu sampai tantangannya selesai. Khusus paket Pro ke atas. Peringatan: pakai hanya untuk situs yang kamu kelola atau miliki izinnya. Melewati proteksi situs orang lain melanggar ketentuan layanan situs itu dan bisa berurutan hukum; semua pemakaian tercatat atas nama API key kamu.",
+    params: [
+      { name: "url", required: true, description: "Alamat halaman yang memasang Turnstile dan kamu kelola sendiri.", example: "https://example.com" },
+      { name: "wait", description: "Batas waktu menunggu tantangan selesai, 3 sampai 45 detik. Default 20.", example: "20" },
+    ],
+    handler: async ({ sp }) => {
+      const url = parseHttpUrl(need(sp, "url", 2000)).toString();
+      const wait = Math.round(num(sp, "wait", 20, 3, 45));
+      const res = await callWorker("turnstile", { url, wait }, null, (wait + 30) * 1000);
+      const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+      if (!data) throw new HttpError(502, "Server pengolah mengirim jawaban yang tidak valid.");
+      return {
+        ...data,
+        warning:
+          "Fitur ini hanya untuk situs milik sendiri. Memakainya untuk melewati proteksi situs pihak lain melanggar ketentuan layanan situs tersebut dan dapat berurutan hukum. Pemakaian tercatat atas nama API key kamu.",
+      };
+    },
+  },
+  {
     category: "tools", slug: "web2pdf", kind: "json",
     title: "Website ke PDF",
     description: `Simpan sebuah halaman web sebagai berkas PDF, lengkap dengan gambar dan warna latarnya. Hasilnya tautan unduhan PDF. ${KEEP}`,

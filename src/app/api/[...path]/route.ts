@@ -142,6 +142,17 @@ async function handle(req: Request, ctx: RouteCtx) {
     // Kuota harian paket pemilik key. Terisi lagi pukul 00.00 WIB. Akun admin dan paket tanpa
     // batas tidak terkena kuota. Setelah kuota harian habis, permintaan memotong limit tambahan.
     const quota = keyQuota(apiKey);
+
+    // Endpoint bertanda `pro` hanya untuk paket berbayar yang masih aktif. Diperiksa sebelum
+    // kuota dipotong supaya penolakan tidak menghabiskan jatah harian pemilik key.
+    if (endpoint.pro && !quota.admin && quota.plan.price <= 0) {
+      return fail(
+        403,
+        `Endpoint '/api/${key}' khusus akun paket Pro, Enterprise, atau Bisnis. Akun kamu masih di paket ${quota.plan.name}. Naikkan paket di ${origin}/paket untuk memakainya.`,
+        { ...rlHeaders, "x-plan": quota.plan.id, "x-requires-plan": "pro" },
+        { pro_only: true, plan: quota.plan.id, upgrade: `${origin}/paket` },
+      );
+    }
     if (quota.unlimited) rlHeaders = { ...rlHeaders, "x-plan": quota.admin ? "admin" : quota.plan.id };
     const quotaHeaders = (left: number, extra: number) => ({ "x-plan": quota.plan.id, "x-quota-limit": String(quota.plan.daily), "x-quota-remaining": String(left), "x-quota-reset": String(quota.resetIn), "x-limit-extra": String(extra) });
     if (!quota.unlimited && quota.left <= 0) {

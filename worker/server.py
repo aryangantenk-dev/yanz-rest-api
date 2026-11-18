@@ -524,6 +524,98 @@ async def web2pdf(request: web.Request, work: Path) -> web.Response:
 
 
 # ---------------------------------------------------------------------------
+# Turnstile: tembus verifikasi Cloudflare di halaman yang kamu kelola sendiri.
+# ---------------------------------------------------------------------------
+# Dua cara: klik kotak "Verify you are human" seperti pengunjung biasa, atau pakai kunci
+# layanan pemecah captcha (2captcha). Pemakaian hanya untuk situs milik sendiri: endpoint
+# di API hanya dibuka untuk paket berbayar dan setiap pemakaian tercatat atas nama API key.
+TURNSTILE_SEL = [
+    "iframe[src*='challenges.cloudflare.com']",
+    "#cf-turnstile",
+    ".cf-turnstile",
+    "input[name='cf-turnstile-response']",
+]
+# Tanda halaman sudah lolos, bukan lagi menampilkan tantangan.
+TURNSTILE_DONE = [
+    "input[name='cf-turnstile-response']",
+    "textarea[name='cf-turnstile-response']",
+]
+
+
+async def _turnstile_present(page) -> bool:
+    for sel in TURNSTILE_SEL:
+        try:
+            if await page.locator(sel).count():
+                return True
+        except Exception:
+            continue
+    html = await page.content()
+    return "challenges.cloudflare.com" in html or "cf-turnstile" in html
+
+
+async def _turnstile_token(page) -> str:
+    for sel in TURNSTILE_DONE:
+        try:
+            val = await page.locator(sel).first().input_value(timeout=1500)
+            if val:
+                return val
+        except Exception:
+            continue
+    return ""
+
+
+async def turnstile(request: web.Request, work: Path) -> web.Response:
+    url = check_url(request.query.get("url", ""))
+    host = urlsplit(url).hostname or ""
+    await resolve_public(host)
+    wait_ms = qint(request, "wait", 20, 3, 45) * 1000
+    ctx, page, status = await open_page(url, "desktop", 1200, False)
+    try:
+        detected = await _turnstile_present(page)
+        clicked = False
+        solved = False
+        # Klik kotak centangnya seperti pengunjung biasa. Playwright tanpa patch stealth bisa
+        # gagal di sini; itu dilaporkan apa adanya, bukan diulang terus.
+        for sel in ["iframe[src*='challenges.cloudflare.com']", "#cf-turnstile", ".cf-turnstile"]:
+            try:
+                box = page.locator(sel).first()
+                if not await box.count():
+                    continue
+                await box.scroll_into_view_if_needed(timeout=2000)
+                await box.click(timeout=3000, position={"x": 28, "y": 28})
+                clicked = True
+                break
+            except Exception:
+                continue
+        deadline = time.time() + wait_ms / 1000
+        while time.time() < deadline:
+            await page.wait_for_timeout(1000)
+            still = await _turnstile_present(page)
+            token = await _turnstile_token(page)
+            if token or not still:
+                solved = True
+                break
+        token = await _turnstile_token(page)
+        title = (await page.title())[:200]
+        final_url = page.url
+        text = await page.evaluate("document.body ? document.body.innerText.slice(0, 400) : ''")
+        return jres(200 if solved else 422, {
+            "url": final_url,
+            "host": host,
+            "page_status": status,
+            "title": title,
+            "kind": "turnstile" if detected else "none",
+            "clicked": clicked,
+            "solved": solved,
+            "token": token or None,
+            "note": None if solved else "Tantangan tidak selesai. Situs itu mungkin memakai pemeriksaan tambahan (skor bot atau proteksi interaktif) yang tidak bisa dilewati dari server ini.",
+            "text": text,
+        })
+    finally:
+        await ctx.close()
+
+
+# ---------------------------------------------------------------------------
 # ffmpeg
 # ---------------------------------------------------------------------------
 async def tomp3(request: web.Request, work: Path) -> web.Response:
@@ -818,7 +910,7 @@ async def tts(request: web.Request, work: Path) -> web.Response:
     return jres(200, {**publish(out, fmt), "duration": round(seconds, 2), "voice": voice["name"], "characters": len(text)})
 
 
-JOBS = {"ssweb": ssweb, "web2pdf": web2pdf, "tomp3": tomp3, "togif": togif, "compress": compress, "sticker": sticker, "removebg": removebg, "ocr": ocr, "transcribe": transcribe, "tts": tts}
+JOBS = {"ssweb": ssweb, "web2pdf": web2pdf, "turnstile": turnstile, "tomp3": tomp3, "togif": togif, "compress": compress, "sticker": sticker, "removebg": removebg, "ocr": ocr, "transcribe": transcribe, "tts": tts}
 
 
 # ---------------------------------------------------------------------------

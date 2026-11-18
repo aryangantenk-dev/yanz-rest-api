@@ -81,6 +81,7 @@ export function toMeta(e: Endpoint): EndpointMeta {
     params: e.params,
     kind: e.kind,
     ...(e.upload ? { upload: e.upload } : {}),
+    ...(e.pro ? { pro: true } : {}),
     path: `/api/${e.category}/${e.slug}`,
   };
 }

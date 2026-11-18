@@ -42,6 +42,11 @@ export type Endpoint = {
   /** Slug lain yang menunjuk ke endpoint yang sama (didaftarkan sebagai jalur tambahan). */
   aliases?: string[];
   /**
+   * Endpoint ini hanya untuk akun paket berbayar (Pro ke atas). Permintaan dengan API key
+   * paket Gratis dijawab 403 sebelum handler dijalankan.
+   */
+  pro?: boolean;
+  /**
    * Endpoint ini juga menerima berkas lewat POST (multipart/form-data, nama field `field`).
    * Endpoint lain hanya menerima GET. Playground menampilkan pemilih berkas untuknya.
    */

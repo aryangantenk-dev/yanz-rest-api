@@ -209,6 +209,7 @@ function EndpointCard({ e, fallback, forceOpen, keyRequired, blocked }: { e: End
             <span className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
               <span className="text-base font-semibold">{e.title}</span>
               <code className="wrap-anywhere font-mono text-sm text-muted">{e.path}</code>
+              {e.pro && <span className="border border-ok px-1.5 font-mono text-xs font-semibold text-ok">PRO</span>}
               {blocked !== undefined && <span className="border border-danger px-1.5 font-mono text-xs font-semibold text-danger">Nonaktif</span>}
             </span>
             <span className="mt-1 block text-sm text-muted">{e.description}</span>
@@ -227,6 +228,20 @@ function EndpointCard({ e, fallback, forceOpen, keyRequired, blocked }: { e: End
                 <p role="note" className="wrap-anywhere border border-danger p-3 text-sm font-medium text-danger">
                   Endpoint ini sedang dinonaktifkan oleh admin{blocked ? `. Alasan: ${blocked.replace(/[.\s]+$/, "")}` : ""}. Permintaan ke sini dijawab 503 sampai endpoint diaktifkan lagi.
                 </p>
+              )}
+              {e.pro && (
+                <div role="note" className="space-y-2 border border-ok p-3 text-sm">
+                  <p className="font-semibold text-ok">Khusus paket Pro, Enterprise, dan Bisnis</p>
+                  <p className="text-muted">
+                    Endpoint ini memakai sumber daya besar, jadi tidak dibuka untuk paket Gratis. Akun paket Gratis yang memanggilnya dijawab 403.
+                    Naikkan paket di <a className="font-medium underline" href="/paket">/paket</a>.
+                  </p>
+                  <p className="text-muted">
+                    <strong className="font-semibold text-fg">Peringatan:</strong> pakai hanya untuk situs yang kamu kelola sendiri atau yang
+                    mengizinkannya. Memakai fitur ini untuk melewati proteksi situs orang lain bisa melanggar ketentuan layanan situs itu dan
+                    hukum yang berlaku. Semua pemakaian tercatat atas nama API key kamu.
+                  </p>
+                </div>
               )}
               {e.upload && (
                 <div>

@@ -329,7 +329,7 @@ export const sflEndpoints: Endpoint[] = [
     aliases: ["safelinku"],
     title: "Bypass SafelinkU (sfl.gl)",
     description:
-      "Buka tautan safelink sfl.gl (SafelinkU) sampai tautan tujuannya ketemu, tanpa iklan dan tanpa klik manual. Endpoint menjalankan sendiri alur verifikasinya: ambil sesi, tunggu timer, lalu ikuti pengalihan sampai keluar dari sfl.gl. Butuh 15 sampai 40 detik karena timernya memang nyata. Belum bisa menembus tautan yang memakai captcha atau passcode.",
+      "Buka tautan safelink sfl.gl (SafelinkU) sampai tautan tujuannya ketemu, tanpa iklan dan tanpa klik manual. Endpoint menjalankan sendiri alur verifikasinya (ambil sesi, tunggu timer, ikuti pengalihan) lalu mengembalikan alamat halaman akhir beserta daftar halaman yang dilewati. Sebagian tautan selesai dalam hitungan detik, sebagian lain butuh 15 sampai 40 detik karena timer verifikasinya nyata. Tautan yang memakai captcha atau passcode belum bisa dibuka otomatis.",
     params: [
       {
         name: "url",

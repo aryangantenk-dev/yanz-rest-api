@@ -26,7 +26,7 @@ from urllib.parse import urljoin, urlsplit
 import aiohttp
 from aiohttp import web
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 ROOT = Path(__file__).resolve().parent
 
 
@@ -451,43 +451,58 @@ async def open_page(url: str, device: str, wait_ms: int, dark: bool):
     try:
         from playwright.async_api import Error as PwError, TimeoutError as PwTimeout
 
+        async def fetch():
+            try:
+                return await page.goto(url, wait_until="load", timeout=30000)
+            except PwTimeout:
+                # Halaman berat sering tidak pernah mencapai "load": cukup bila isinya sudah ada.
+                if page.url in ("about:blank", ""):
+                    raise Fail(504, "Halaman itu terlalu lama dimuat.")
+                return None
+
         try:
-            res = await page.goto(url, wait_until="load", timeout=30000)
-        except PwTimeout:
-            # Halaman berat sering tidak pernah mencapai "load"; cukup bila isinya sudah ada.
-            res = None
-            if page.url in ("about:blank", ""):
-                raise Fail(504, "Halaman itu terlalu lama dimuat.")
-        except PwError as e:
-            msg = str(e)
-            if "ERR_NAME_NOT_RESOLVED" in msg:
-                raise Fail(400, "Alamat tidak ditemukan. Periksa lagi tautannya.")
-            if "ERR_BLOCKED_BY_CLIENT" in msg or "ERR_ABORTED" in msg:
-                raise Fail(400, "Alamat itu tidak diizinkan atau bukan halaman web.")
-            first = msg.splitlines()[0][:200]
-            # Kode galat Chromium dipakai untuk memberi pesan yang bisa ditindaklanjuti, bukan
-            # "tidak bisa dibuka" yang tidak menjelaskan apa pun ke pemanggil.
-            code = ""
-            m = re.search(r"net::(ERR_[A-Z_]+)", msg)
-            if m:
-                code = m.group(1)
-            print(f"[halaman] {first}", file=sys.stderr, flush=True)
-            if "ERR_CERT" in msg or "ERR_SSL" in msg:
-                raise Fail(502, "Sertifikat keamanan halaman itu bermasalah, jadi tidak bisa dibuka.")
-            if code in ("ERR_NAME_NOT_RESOLVED", "ERR_NAME_RESOLUTION_FAILED"):
-                raise Fail(400, "Alamat tidak ditemukan. Periksa lagi tautannya.")
-            if code in ("ERR_CONNECTION_REFUSED", "ERR_CONNECTION_RESET", "ERR_CONNECTION_CLOSED",
-                        "ERR_CONNECTION_TIMED_OUT", "ERR_TIMED_OUT", "ERR_ADDRESS_UNREACHABLE",
-                        "ERR_INTERNET_DISCONNECTED", "ERR_TUNNEL_CONNECTION_FAILED", "ERR_PROXY_CONNECTION_FAILED"):
-                raise Fail(502, f"Situs itu tidak merespons dari server worker ({code}).")
-            if code == "ERR_TOO_MANY_REDIRECTS":
-                raise Fail(502, "Situs itu mengalihkan terlalu banyak kali sebelum halamannya terbuka.")
-            if code in ("ERR_BLOCKED_BY_CLIENT", "ERR_BLOCKED_BY_RESPONSE"):
-                raise Fail(400, "Alamat itu tidak diizinkan atau menolak koneksi dari server worker.")
-            if code == "ERR_ABORTED":
-                # Terjadi pada unduhan atau pengalihan yang diputus halaman itu sendiri.
-                raise Fail(504, "Halaman itu membatalkan pemuatan sebelum selesai. Coba lagi.")
-            raise Fail(502, f"Halaman itu tidak bisa dibuka{': ' + code if code else ''}.")
+            res = await fetch()
+        except PwError as first_err:
+            # Galat jaringan sesaat (DNS belum siap tepat setelah boot, rute keluar baru aktif)
+            # sering lolos pada percobaan kedua. Hanya galat jaringan yang diulang.
+            transient = any(
+                k in str(first_err)
+                for k in ("ERR_CONNECTION", "ERR_TIMED_OUT", "ERR_NAME_NOT_RESOLVED", "ERR_ADDRESS_UNREACHABLE", "ERR_INTERNET_DISCONNECTED")
+            )
+            if not transient:
+                msg = str(first_err)
+                code = ""
+                m = re.search(r"net::(ERR_[A-Z_]+)", msg)
+                if m:
+                    code = m.group(1)
+                print(f"[halaman] {msg.splitlines()[0][:200]}", file=sys.stderr, flush=True)
+                if "ERR_CERT" in msg or "ERR_SSL" in msg:
+                    raise Fail(502, "Sertifikat keamanan halaman itu bermasalah, jadi tidak bisa dibuka.")
+                if code == "ERR_TOO_MANY_REDIRECTS":
+                    raise Fail(502, "Situs itu mengalihkan terlalu banyak kali sebelum halamannya terbuka.")
+                if code in ("ERR_BLOCKED_BY_CLIENT", "ERR_BLOCKED_BY_RESPONSE"):
+                    raise Fail(400, "Alamat itu tidak diizinkan atau menolak koneksi dari server worker.")
+                if code == "ERR_ABORTED":
+                    raise Fail(504, "Halaman itu membatalkan pemuatan sebelum selesai. Coba lagi.")
+                raise Fail(502, f"Halaman itu tidak bisa dibuka{': ' + code if code else ''}.")
+            await page.wait_for_timeout(1500)
+            try:
+                res = await fetch()
+            except PwError as e:
+                code = ""
+                m = re.search(r"net::(ERR_[A-Z_]+)", str(e))
+                if m:
+                    code = m.group(1)
+                print(f"[halaman] {str(e).splitlines()[0][:200]}", file=sys.stderr, flush=True)
+                if code in ("ERR_NAME_NOT_RESOLVED", "ERR_NAME_RESOLUTION_FAILED"):
+                    raise Fail(400, "Alamat tidak ditemukan. Periksa lagi tautannya.")
+                if code in (
+                    "ERR_CONNECTION_REFUSED", "ERR_CONNECTION_RESET", "ERR_CONNECTION_CLOSED",
+                    "ERR_CONNECTION_TIMED_OUT", "ERR_TIMED_OUT", "ERR_ADDRESS_UNREACHABLE",
+                    "ERR_INTERNET_DISCONNECTED", "ERR_TUNNEL_CONNECTION_FAILED", "ERR_PROXY_CONNECTION_FAILED",
+                ):
+                    raise Fail(502, f"Situs itu tidak merespons dari server worker ({code}).")
+                raise Fail(502, f"Halaman itu tidak bisa dibuka{': ' + code if code else ''}.")
         if wait_ms:
             await page.wait_for_timeout(wait_ms)
         return ctx, page, (res.status if res else 0)

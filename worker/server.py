@@ -26,7 +26,7 @@ from urllib.parse import urljoin, urlsplit
 import aiohttp
 from aiohttp import web
 
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 ROOT = Path(__file__).resolve().parent
 
 
@@ -495,23 +495,34 @@ async def _pick_browser(clean_env: dict):
 
 
 async def _probe(b) -> bool:
-    """Pastikan browser bisa membuka halaman sungguhan, bukan hanya start."""
+    """Uji nyata: browser harus bisa memuat halaman http(s) sungguhan.
+
+    Jangan memakai port aneh seperti 127.0.0.1:1 — Chromium memblokirnya sebagai
+    ERR_UNSAFE_PORT sehingga browser yang sehat pun dianggap mati jaringan.
+    """
+    from playwright.async_api import Error as PwError
+
+    ctx = await b.new_context()
+    page = await ctx.new_page()
     try:
-        ctx = await b.new_context()
-        page = await ctx.new_page()
+        resp = await page.goto("https://www.google.com/generate_204", timeout=20000, wait_until="commit")
+        return bool(resp and resp.status < 500)
+    except PwError as e:
+        msg = str(e)
+        if "ERR_INTERNET_DISCONNECTED" in msg or "ERR_NAME_NOT_RESOLVED" in msg or "ERR_PROXY" in msg:
+            return False
+        # Galat lain (situs diblokir, sertifikat, timeout) tidak membuktikan jaringan mati:
+        # buktikan lewat jalur HTTP biasa di dalam browser yang sama.
         try:
-            await page.goto("http://127.0.0.1:1/", timeout=8000)
+            ctx2 = await b.new_context()
+            p2 = await ctx2.new_page()
+            try:
+                r = await p2.goto("http://example.com", timeout=15000, wait_until="commit")
+                return bool(r)
+            finally:
+                await ctx2.close()
+        except Exception:  # noqa: BLE001
             return False
-        except Exception as e:  # noqa: BLE001
-            msg = str(e)
-            # Koneksi ditolak = jaringan berjalan. ERR_INTERNET_DISCONNECTED = jaringan mati.
-            if "ERR_INTERNET_DISCONNECTED" in msg or "ERR_NAME_NOT_RESOLVED" in msg:
-                return False
-            if "ERR_CONNECTION_REFUSED" in msg or "ERR_CONNECTION_RESET" in msg:
-                return True
-            return False
-    except Exception:  # noqa: BLE001
-        return False
     finally:
         try:
             await ctx.close()
@@ -1270,5 +1281,50 @@ def make_app() -> web.Application:
     return app
 
 
+def _local_doctor() -> int:
+    """Uji browser langsung dari terminal: python server.py doctor"""
+    import asyncio
+
+    async def run() -> int:
+        global _playwright
+        from playwright.async_api import async_playwright
+
+        _playwright = await async_playwright().start()
+        env = {k: v for k, v in os.environ.items() if "proxy" not in k.lower()}
+        print(f"bawaan : {_bundled_chrome()}")
+        print(f"sistem : {shutil.which('chromium') or shutil.which('google-chrome') or '-'}")
+        ok = False
+        for exe in (None, _bundled_chrome()):
+            for profile in ("normal", "single", "bridge"):
+                try:
+                    b = await _launch(exe, profile, env)
+                except Exception as e:  # noqa: BLE001
+                    print(f"  {exe or 'bawaan':<20} {profile:<6} gagal start: {str(e).splitlines()[0][:90]}")
+                    continue
+                try:
+                    ctx = await b.new_context()
+                    page = await ctx.new_page()
+                    try:
+                        r = await page.goto("https://example.com", timeout=20000, wait_until="commit")
+                        ua = await page.evaluate("navigator.userAgent")
+                        print(f"  {exe or 'bawaan':<20} {profile:<6} OK  status={r.status} ua={ua[:40]}")
+                        ok = True
+                    except Exception as e:  # noqa: BLE001
+                        print(f"  {exe or 'bawaan':<20} {profile:<6} GAGAL: {str(e).splitlines()[0][:90]}")
+                finally:
+                    await b.close()
+                if ok:
+                    break
+            if ok:
+                break
+        await _playwright.stop()
+        print("\nHASIL:", "browser bisa membuka situs" if ok else "browser TIDAK bisa keluar jaringan")
+        return 0 if ok else 1
+
+    return asyncio.run(run())
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] in ("doctor", "diag-local"):
+        raise SystemExit(_local_doctor())
     web.run_app(make_app(), host="0.0.0.0", port=PORT, access_log=None, print=lambda *_: print(f"yanz-worker {VERSION} di port {PORT}", flush=True))

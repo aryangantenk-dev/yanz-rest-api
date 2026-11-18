@@ -55,12 +55,12 @@ fi
 NOW="$(grep -o 'VERSION = "[^"]*"' server.py 2>/dev/null | head -n1 | cut -d'"' -f2)"
 if [ -n "$NOW" ]; then ok "worker versi $NOW"; else warn "VERSION tidak terbaca"; fi
 # Kalau repo bukan checkout git (unduhan zip), ambil server.py langsung dari GitHub.
-if [ "$NOW" != "1.2.2" ] && command -v curl >/dev/null 2>&1; then
+if [ "$NOW" != "1.2.3" ] && command -v curl >/dev/null 2>&1; then
   if curl -fsSL --max-time 60 "$GITHUB_RAW/worker/server.py" -o /tmp/y-server.py 2>/dev/null &&
-     grep -q 'VERSION = "1.2.2"' /tmp/y-server.py; then
+     grep -q 'VERSION = "1.2.3"' /tmp/y-server.py; then
     cp -f server.py "server.py.bak.$(date +%s)" 2>/dev/null || true
     mv -f /tmp/y-server.py server.py
-    ok "server.py diperbarui dari GitHub (1.2.2)"
+    ok "server.py diperbarui dari GitHub (1.2.3)"
   else
     warn "tidak bisa mengambil server.py dari GitHub (jaringan/DNS?). Lanjut dengan versi lokal."
   fi
@@ -113,8 +113,18 @@ bash ctl.sh restart >/dev/null 2>&1 || warn "restart gagal"
 PORT="$(grep -E '^PORT=' .env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '[:space:]')"; PORT="${PORT:-8080}"
 KEY="$(grep -E '^WORKER_KEY=' .env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '[:space:]')"
 for _ in $(seq 1 40); do curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1 && break; sleep 1; done
-RESULT="$(curl -sS --max-time 150 -X POST -H "x-worker-key: ${KEY}" \
-  "http://127.0.0.1:${PORT}/v1/diag?url=https://example.com" 2>&1 || true)"
+ask_diag() {
+  curl -sS --max-time 150 -X POST -H "x-worker-key: ${KEY}" \
+    "http://127.0.0.1:${PORT}/v1/diag?url=https://example.com" 2>&1 || true
+}
+RESULT="$(ask_diag)"
+# "sedang penuh" = antrean worker terkunci. Restart sekali lalu ulangi.
+if echo "$RESULT" | grep -q "sedang penuh"; then
+  warn "antrean worker terkunci; restart sekali lagi..."
+  bash ctl.sh restart >/dev/null 2>&1 || true
+  for _ in $(seq 1 30); do curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1 && break; sleep 1; done
+  RESULT="$(ask_diag)"
+fi
 echo "   $RESULT" | head -c 1200; echo
 if [ "$DOCTOR" = "0" ] || echo "$RESULT" | grep -qE '"chromium"[[:space:]]*:[[:space:]]*\{[^}]*"ok"[[:space:]]*:[[:space:]]*true'; then
   printf '\n\033[32mBERES: Chromium bisa membuka situs.\033[0m Uji dari HP:\n'

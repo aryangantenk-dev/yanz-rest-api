@@ -26,7 +26,7 @@ from urllib.parse import urljoin, urlsplit
 import aiohttp
 from aiohttp import web
 
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 ROOT = Path(__file__).resolve().parent
 
 
@@ -104,6 +104,16 @@ _stats = {"done": 0, "failed": 0, "started": time.time()}
 
 
 class Slot:
+    """Kursi kerja: MAX_JOBS berjalan bersamaan, MAX_QUEUE menunggu.
+
+    `asyncio.wait_for` pada tugas yang menunggu kursi bisa membatalkannya di tengah jalan.
+    Pembatalan itu dulu membuat hitungan `_waiting` tidak pernah turun sehingga worker
+    menjawab "sedang penuh" selamanya sampai di-restart.
+    """
+
+    def __init__(self, job: str):
+        self.job = job
+
     async def __aenter__(self):
         global _waiting
         if _waiting >= MAX_QUEUE:
@@ -111,11 +121,23 @@ class Slot:
         _waiting += 1
         try:
             await _slots.acquire()
-        finally:
+        except BaseException:
             _waiting -= 1
+            raise
+        _waiting -= 1
+        _active[self.job] = time.time()
+        return self
 
     async def __aexit__(self, *exc):
+        _active.pop(self.job, None)
         _slots.release()
+
+
+# Tugas yang sedang memakai kursi: nama tugas -> waktu mulai. Dipakai /health untuk melihat
+# pekerjaan yang menggantung, dan oleh watchdog di bawah.
+_active: dict[str, float] = {}
+# Kursi yang dipakai lebih lama dari ini dianggap menggantung dan dilepas watchdog.
+STUCK_AFTER = int(_env("STUCK_AFTER_SEC", "240"))
 
 
 # ---------------------------------------------------------------------------
@@ -1195,7 +1217,7 @@ async def handle_job(request: web.Request) -> web.Response:
     work = Path(tempfile.mkdtemp(prefix=f"{name}-", dir=DATA / "tmp"))
     started = time.time()
     try:
-        async with Slot():
+        async with Slot(name):
             res = await asyncio.wait_for(fn(request, work), JOB_TIMEOUT + 15)
         _stats["done"] += 1
         res.headers["x-job-ms"] = str(int((time.time() - started) * 1000))
@@ -1213,6 +1235,19 @@ async def handle_job(request: web.Request) -> web.Response:
         return jres(500, {"error": "Server pengolah gagal mengerjakan permintaan ini."})
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+async def _watchdog(app: web.Application) -> None:
+    """Lepas kursi kerja yang menggantung, supaya worker tidak terkunci "penuh" selamanya."""
+    while True:
+        await asyncio.sleep(15)
+        now = time.time()
+        for job, started in list(_active.items()):
+            if now - started > STUCK_AFTER:
+                _active.pop(job, None)
+                if _slots._value < MAX_JOBS:
+                    _slots.release()
+                print(f"[watchdog] kursi {job} dilepas setelah {int(now - started)} dtk", file=sys.stderr, flush=True)
 
 
 async def handle_file(request: web.Request) -> web.StreamResponse:
@@ -1235,8 +1270,10 @@ async def handle_health(request: web.Request) -> web.Response:
     if KEY and hmac.compare_digest(given.encode(), KEY.encode()):
         # Rincian hanya untuk pemilik kunci.
         disk = shutil.disk_usage(DATA)
+        now = time.time()
         body.update({
             "jobs": list(JOBS), "running": MAX_JOBS - _slots._value, "waiting": _waiting, "max_jobs": MAX_JOBS,
+            "active": [{"job": j, "detik": int(now - t)} for j, t in sorted(_active.items())],
             "done": _stats["done"], "failed": _stats["failed"], "uptime": int(time.time() - _stats["started"]),
             "disk_free_mb": disk.free // 1024 // 1024, "models_loaded": sorted(_models),
         })
@@ -1267,6 +1304,16 @@ async def sweeper(app: web.Application):
             pass
 
 
+def _ctx(fn):
+    """Bungkus fungsi latar menjadi cleanup_ctx aiohttp."""
+    async def gen(app):
+        task = asyncio.create_task(fn(app))
+        yield
+        task.cancel()
+
+    return gen
+
+
 def make_app() -> web.Application:
     if len(KEY) < 24:
         sys.exit("WORKER_KEY belum diisi atau terlalu pendek (min. 24 karakter). Jalankan install.sh untuk membuatnya.")
@@ -1278,6 +1325,7 @@ def make_app() -> web.Application:
     app.router.add_get("/f/{name}", handle_file)
     app.router.add_post("/v1/{job}", handle_job)
     app.cleanup_ctx.append(sweeper)
+    app.cleanup_ctx.append(_ctx(_watchdog))
     return app
 
 

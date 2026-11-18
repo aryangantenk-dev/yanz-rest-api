@@ -1,6 +1,6 @@
 import type { Endpoint } from "./types";
 import { HttpError } from "./types";
-import { need, opt, parseHttpUrl } from "./helpers";
+import { need } from "./helpers";
 
 /*
   Endpoint publik NexaDev (api.nexadev.my.id). Tidak pakai kunci API, tapi
@@ -146,64 +146,6 @@ export const nexaEndpoints: Endpoint[] = [
         verified: data.verified === true,
         private: data.private === true,
       };
-    },
-  },
-  {
-    category: "image",
-    slug: "wink",
-    kind: "json",
-    title: "Foto Jadi HD (Wink)",
-    description:
-      "Tingkatkan kualitas sebuah foto: wajah dipertajam dan dihaluskan oleh mesin BeautyPlus di balik layanan Wink. Kirim tautan langsung ke foto, hasilnya tautan gambar versi HD yang bisa langsung dipakai atau diunduh.",
-    params: [
-      {
-        name: "url",
-        required: true,
-        description: "Tautan langsung ke foto (JPG atau PNG) yang bisa diakses publik, sebaiknya berisi wajah yang jelas.",
-        example: "https://clooud.my.id/uploder/uploads/XIxbPP.jpg",
-      },
-    ],
-    handler: async ({ sp }) => {
-      const u = parseHttpUrl(need(sp, "url", 2000));
-      const target = new URL("/api/wink/", BASE);
-      target.searchParams.set("url", u.toString());
-      // Nexa menyimpan hasil per URL, dan kegagalan lama ikut tersimpan. Endpoint ini
-      // mengirim permintaan bersih; bila sumber sedang bermasalah, ulangi sekali.
-      const attempt = async (): Promise<Response | null> => {
-        try {
-          return await fetch(target, {
-            headers: {
-              accept: "application/json, text/plain, */*",
-              "accept-language": "id-ID,id;q=0.9",
-              referer: `${BASE}/`,
-              "user-agent":
-                "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36",
-            },
-            cache: "no-store",
-            signal: AbortSignal.timeout(45000),
-          });
-        } catch {
-          return null;
-        }
-      };
-      let res = await attempt();
-      if (!res || !res.ok) {
-        await new Promise((r) => setTimeout(r, 1200));
-        res = (await attempt()) ?? res;
-      }
-      if (!res) throw new HttpError(502, "Server NexaDev tidak bisa dihubungi. Coba lagi nanti.");
-      const data = (await res.json().catch(() => null)) as
-        | { status?: boolean; message?: string; result?: string; resultUrl?: string; data?: { url?: string; mode?: string; engine?: string } }
-        | null;
-      if (res.status === 429) throw new HttpError(429, "Batas 100 permintaan NexaDev sedang tercapai. Coba lagi beberapa saat lagi.");
-      const out = data?.resultUrl ?? data?.result ?? data?.data?.url;
-      if (!res.ok || !data || data.status === false || typeof out !== "string" || !out) {
-        throw new HttpError(
-          res.status === 400 || res.status === 404 ? 400 : 502,
-          data?.message || "Layanan sumber gagal memproses gambar itu. Coba foto lain yang wajahnya lebih jelas.",
-        );
-      }
-      return { source: u.toString(), result: out, engine: data.data?.engine ?? null, mode: data.data?.mode ?? null };
     },
   },
 ];

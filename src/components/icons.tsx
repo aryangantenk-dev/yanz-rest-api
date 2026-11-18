@@ -112,6 +112,24 @@ export function CategoryIcon({ id, className }: { id: CategoryId } & P) {
           <path d="M8 21h8" />
         </svg>
       );
+    case "donghua":
+      // Layar putar dengan kilau: donghua (animasi Tiongkok) dibedakan dari anime yang berbentuk layar kotak.
+      return (
+        <svg {...base} className={className}>
+          <circle cx="10.5" cy="13.5" r="7.5" />
+          <path d="M9 10.5l4 3-4 3v-6z" />
+          <path d="M18.5 3.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2z" />
+        </svg>
+      );
+    case "novel":
+      // Buku tertutup dengan baris teks, dibedakan dari komik yang berbentuk buku terbuka.
+      return (
+        <svg {...base} className={className}>
+          <path d="M6 3h10.5A1.5 1.5 0 0 1 18 4.5v15a1.5 1.5 0 0 1-1.5 1.5H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
+          <path d="M4 17h14" />
+          <path d="M8 7h6M8 10.5h6" />
+        </svg>
+      );
     case "film":
       return (
         <svg {...base} className={className}>

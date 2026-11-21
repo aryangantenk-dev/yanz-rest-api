@@ -69,18 +69,24 @@ function titleize(slug: string): string {
 }
 
 /** Naik dari sebuah elemen sampai ketemu blok yang memuat gambar + genre + judul. */
-function blockOf($: CheerioAPI, el: El, maxDepth = 6): El {
+function blockOf($: CheerioAPI, el: El, maxDepth = 8): El {
   let node = el;
+  let best = el;
   for (let i = 0; i < maxDepth; i++) {
     const parent = node.parent();
     if (!parent.length || parent.is("body, html")) break;
     node = parent;
-    if (node.find('a[href*="/genre/"]').length || node.find("img").length > 0) {
-      // Berhenti di blok pertama yang memuat satu kartu saja (bukan seluruh daftar).
-      if (node.find('a[href*="/series/"]').length <= 1) return node;
-    }
+    // Madara menautkan seri dua kali (gambar + judul), jadi yang dihitung slug uniknya.
+    const slugs = new Set<string>();
+    node.find('a[href*="/series/"]').each((_, a) => {
+      const ref = classify($(a).attr("href"));
+      if (ref?.kind === "series") slugs.add(ref.slug);
+    });
+    if (slugs.size > 1) break; // sudah melewati batas kartu ini
+    best = node;
+    if (node.find('a[href*="/genre/"]').length && node.find("img").length) break;
   }
-  return node;
+  return best;
 }
 
 type Card = {
@@ -283,6 +289,28 @@ async function readChapter(url: string) {
   };
 }
 
+/**
+ * Sinopsis di halaman seri. .description-summary tidak selalu ada, jadi dicari juga blok
+ * berisi beberapa paragraf yang bukan bagian dari daftar chapter.
+ */
+function synopsisOf($: CheerioAPI): string | null {
+  const direct = clean($(".description-summary, .summary__content, .description-summary p").first().text());
+  if (direct.length > 40) return direct.slice(0, 1200);
+  let best = "";
+  $("div, section").each((_, node) => {
+    const el = $(node);
+    if (el.find("-chapter-").length && el.find("p").length < 3) return;
+    const ps = el
+      .children("p")
+      .map((_, p) => clean($(p).text()))
+      .get()
+      .filter((t) => t.length > 40);
+    const joined = ps.join("\n\n");
+    if (joined.length > best.length && joined.length < 6000) best = joined;
+  });
+  return best ? best.slice(0, 1200) : null;
+}
+
 export const bacalnEndpoints: Endpoint[] = [
   {
     category: "novel",
@@ -330,7 +358,10 @@ export const bacalnEndpoints: Endpoint[] = [
           book_title: (clean(bookLink.attr("title")) || heading || titleize(bookSlug)).replace(/\s+Bahasa Indonesia\s*$/i, "").trim(),
           book_url: seriesUrl(bookSlug),
           cover: coverOf($, block),
-          excerpt: clean(block.find("p").last().text()).slice(0, 240) || null,
+          excerpt:
+            clean(block.find("p").last().text()).slice(0, 240) ||
+            clean(block.clone().find("h1, h2, h3, h4, .post-title").remove().end().text()).replace(/\s+/g, " ").slice(0, 240) ||
+            null,
         });
       });
       return { source: url, page: p, total: items.length, items };
@@ -436,7 +467,7 @@ export const bacalnEndpoints: Endpoint[] = [
         type: labeled($, scope, ["tipe", "type"]),
         score: score !== null && Number.isFinite(score) ? score : null,
         genres: genresOf($, scope),
-        synopsis: clean($(".description-summary, .summary__content, .post-content_item .summary-content").first().text()).slice(0, 1200) || null,
+        synopsis: synopsisOf($),
         cover: coverOf($, $(".summary_image, .manga__image, .item-thumb, .post-content").first()) ?? coverOf($, $.root()),
         total_chapters: chapters.length,
         first_chapter: chapters[0] ?? null,

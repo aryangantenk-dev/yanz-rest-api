@@ -11,6 +11,7 @@ import { animeEndpoints } from "./anime";
 import { filmEndpoints } from "./film";
 import { donghuaEndpoints } from "./donghua";
 import { novelEndpoints } from "./novel";
+import { bacalnEndpoints } from "./bacaln";
 import { canvasEndpoints } from "./canvas";
 import { searchEndpoints } from "./search";
 import { downloaderEndpoints } from "./downloader";
@@ -46,6 +47,7 @@ export const endpoints: Endpoint[] = [
   ...filmEndpoints,
   ...donghuaEndpoints,
   ...novelEndpoints,
+  ...bacalnEndpoints,
   ...jkt48Endpoints,
   // Kategorinya beragam; urutan per kategori diatur ulang oleh allMeta().
   ...mediaToolEndpoints,

@@ -110,9 +110,9 @@ export const categories: Category[] = [
   {
     id: "novel",
     name: "Novel",
-    tagline: "Scraper WTR-LAB",
-    description: "Scraper wtr-lab.com: novel terjemahan terbaru, peringkat harian/mingguan/bulanan, pencarian, jelajah genre, metadata lengkap seri, isi chapter, dan proxy sampul.",
-    seoTitle: "REST API Novel: Scraper WTR-LAB, Chapter Teks & Peringkat",
+    tagline: "Scraper WTR-LAB & BacaLN",
+    description: "Dua sumber novel: wtr-lab.com (terjemahan Inggris) untuk peringkat dan katalog, serta bacaln.com (novel bahasa Indonesia) untuk chapter terbaru, pencarian, detail seri, dan isi bacaan. Semua lengkap dengan proxy sampul.",
+    seoTitle: "REST API Novel: Scraper WTR-LAB & BacaLN, Chapter Teks",
   },
   {
     id: "film",
